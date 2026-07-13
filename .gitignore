@@ -1,0 +1,13 @@
+# IDE
+.idea/
+
+# Gradle
+.gradle/
+build/
+target/
+target-api/
+!gradle/wrapper/gradle-wrapper.jar
+
+# OS
+.DS_Store
+Thumbs.db

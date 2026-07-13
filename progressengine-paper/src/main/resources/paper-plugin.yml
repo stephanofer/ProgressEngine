@@ -1,0 +1,23 @@
+name: ProgressEngine
+version: '${version}'
+main: com.stephanofer.progressengine.ProgressEngine
+bootstrapper: com.stephanofer.progressengine.ProgressEngineBootstrap
+api-version: '26.1'
+load: POSTWORLD
+authors: [stephanofer]
+website: https://stephanofer.com
+
+dependencies:
+  server:
+    NetworkPlayerSettings:
+      load: BEFORE
+      required: true
+      join-classpath: true
+    LuckPerms:
+      load: BEFORE
+      required: true
+      join-classpath: true
+    PlaceholderAPI:
+      load: BEFORE
+      required: false
+      join-classpath: true
