@@ -302,7 +302,7 @@ Se aplican estas reglas durante todo el plan:
 - [x] Un booster no listo se espera; uno fallido no produce un award incorrecto.
 - [x] Todas las mutaciones del `PointsService` tienen implementación real.
 
-**Constancia de cierre:** [x] Terminado | Fecha: 7/15/26 | 
+**Constancia de cierre:** [x] Terminado | Fecha: 7/15/26 |
 
 ## Bloque 8: Lifecycle y readiness del jugador
 
@@ -336,7 +336,7 @@ Se aplican estas reglas durante todo el plan:
 - [x] Logout no cancela ni falsea una operación ya enviada.
 - [x] Nombres actuales se mantienen correctos ante rename y reutilización.
 
-**Constancia de cierre:** [x] Terminado | Fecha: 7/15/26 | 
+**Constancia de cierre:** [x] Terminado | Fecha: 7/15/26
 
 ## Bloque 9: Localización, identidad y feedback
 
@@ -405,12 +405,12 @@ Se aplican estas reglas durante todo el plan:
 
 **El bloque se considera terminado cuando:**
 
-- [ ] Eliminar Redis no pierde ni bloquea mutaciones económicas.
-- [ ] Mensajes duplicados o fuera de orden no hacen retroceder snapshots.
-- [ ] La reconciliación corrige mensajes perdidos.
-- [ ] La recuperación espera suscripciones reales antes de volver a estado normal.
+- [x] Eliminar Redis no pierde ni bloquea mutaciones económicas.
+- [x] Mensajes duplicados o fuera de orden no hacen retroceder snapshots.
+- [x] La reconciliación corrige mensajes perdidos.
+- [x] La recuperación espera suscripciones reales antes de volver a estado normal.
 
-**Constancia de cierre:** [ ] Terminado | Fecha: __________ | 
+**Constancia de cierre:** [x] Terminado | Fecha: 7/15/26
 
 ## Bloque 11: Comandos de jugador y administración
 

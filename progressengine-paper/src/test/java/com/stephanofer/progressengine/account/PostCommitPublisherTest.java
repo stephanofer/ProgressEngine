@@ -82,6 +82,24 @@ final class PostCommitPublisherTest {
         assertEquals(5L, store.cached(playerId).orElseThrow().balance());
     }
 
+    @Test
+    void networkPublicationStartsButDoesNotDelayLocalDispatchFuture() {
+        UUID playerId = UUID.randomUUID();
+        CompletableFuture<Void> network = new CompletableFuture<>();
+        BalanceStore store = store();
+        PostCommitPublisher publisher = new PostCommitPublisher(
+            store,
+            (receipt, changes) -> CompletableFuture.completedFuture(null),
+            receipt -> network,
+            Logger.getLogger("test")
+        );
+
+        CompletableFuture<Void> result = publisher.publish(receipt(BalanceChange.single(playerId, 5L, 0L, 5L, 1L)));
+
+        result.join();
+        assertFalse(network.isDone());
+    }
+
     private static BalanceStore store() {
         return new BalanceStore(
             playerId -> CompletableFuture.failedFuture(new AssertionError("loader must not run")),

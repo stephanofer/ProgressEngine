@@ -7,6 +7,7 @@ import com.stephanofer.progressengine.account.AccountEconomy;
 import com.stephanofer.progressengine.account.BalanceStore;
 import com.stephanofer.progressengine.account.BukkitPostCommitEventDispatcher;
 import com.stephanofer.progressengine.account.PostCommitPublisher;
+import com.stephanofer.progressengine.account.PostCommitNetworkPublisher;
 import com.stephanofer.progressengine.api.source.OperationSource;
 import com.stephanofer.progressengine.award.AwardCoordinator;
 import com.stephanofer.progressengine.award.BukkitAwardPrepareEventDispatcher;
@@ -34,6 +35,13 @@ import com.stephanofer.progressengine.localization.LocalizedMessages;
 import com.stephanofer.progressengine.persistence.ProgressDatabaseFactory;
 import com.stephanofer.progressengine.persistence.ProgressPersistence;
 import com.stephanofer.progressengine.service.ProgressPointsService;
+import com.stephanofer.progressengine.synchronization.BalanceReconciler;
+import com.stephanofer.progressengine.synchronization.BukkitRemoteBalanceEventDispatcher;
+import com.stephanofer.progressengine.synchronization.ProgressRedisFactory;
+import com.stephanofer.progressengine.synchronization.RedisMessageCodec;
+import com.stephanofer.progressengine.synchronization.RedisSyncCoordinator;
+import com.stephanofer.progressengine.synchronization.RemoteBalanceRefresher;
+import com.hera.craftkit.redis.RedisClient;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.Objects;
@@ -63,6 +71,7 @@ public final class ProgressEngineRuntime implements AutoCloseable {
     private final AtomicReference<LocalizedMessages> localizedMessages = new AtomicReference<>();
     private final AtomicReference<PlayerIdentityRenderer> identityRenderer = new AtomicReference<>();
     private final AtomicReference<FeedbackService> feedbackService = new AtomicReference<>();
+    private final AtomicReference<RedisSyncCoordinator> redisSync = new AtomicReference<>();
 
     private ProgressEngineRuntime(
         JavaPlugin plugin,
@@ -280,9 +289,11 @@ public final class ProgressEngineRuntime implements AutoCloseable {
         }
 
         BalanceStore store = new BalanceStore(persistence, snapshot.config().cache(), this.inFlightTracker, Clock.systemUTC());
+        AtomicReference<PostCommitNetworkPublisher> networkPublisher = new AtomicReference<>(PostCommitNetworkPublisher.noop());
         PostCommitPublisher postCommitPublisher = new PostCommitPublisher(
             store,
             new BukkitPostCommitEventDispatcher(this.plugin, this.plugin.getLogger()),
+            receipt -> networkPublisher.get().publish(receipt),
             this.plugin.getLogger()
         );
         AccountEconomy economy = new AccountEconomy(
@@ -359,7 +370,6 @@ public final class ProgressEngineRuntime implements AutoCloseable {
             lifecycleCoordinator,
             this::activeConfig
         );
-
         if (!this.balanceStore.compareAndSet(null, store)) {
             store.close();
             throw new IllegalStateException("ProgressEngine balance store was already initialized");
@@ -396,10 +406,69 @@ public final class ProgressEngineRuntime implements AutoCloseable {
             store.close();
             throw new IllegalStateException("ProgressEngine feedback service was already initialized");
         }
+        RedisSyncCoordinator redisCoordinator;
+        RedisClient redis = null;
+        try {
+            redis = ProgressRedisFactory.create(snapshot.config());
+            RemoteBalanceRefresher remoteRefresher = new RemoteBalanceRefresher(
+                store,
+                new BukkitRemoteBalanceEventDispatcher(this.plugin, this.plugin.getLogger()),
+                this.plugin.getLogger()
+            );
+            BalanceReconciler reconciler = new BalanceReconciler(
+                persistence,
+                store,
+                lifecycleCoordinator,
+                remoteRefresher,
+                this::activeConfig,
+                this.plugin.getLogger(),
+                Clock.systemUTC()
+            );
+            redisCoordinator = new RedisSyncCoordinator(
+                redis,
+                this.lifecycle,
+                this.inFlightTracker,
+                new RedisMessageCodec(),
+                remoteRefresher,
+                reconciler,
+                persistence,
+                lifecycleCoordinator,
+                feedbackService,
+                identityRenderer,
+                this::activeConfig,
+                this::scheduleDelayed,
+                this.plugin.getLogger(),
+                Clock.systemUTC()
+            );
+        } catch (RuntimeException exception) {
+            if (redis != null) {
+                try {
+                    redis.close();
+                } catch (RuntimeException closeFailure) {
+                    exception.addSuppressed(closeFailure);
+                }
+            }
+            clearEconomicReferences(store, economy, lifecycleCoordinator, service, localizedMessages, identityRenderer, feedbackService);
+            feedbackService.close();
+            identityRenderer.close();
+            lifecycleCoordinator.close();
+            store.close();
+            throw exception;
+        }
+        networkPublisher.set(redisCoordinator);
+        if (!this.redisSync.compareAndSet(null, redisCoordinator)) {
+            redisCoordinator.close();
+            feedbackService.close();
+            identityRenderer.close();
+            lifecycleCoordinator.close();
+            store.close();
+            throw new IllegalStateException("ProgressEngine Redis synchronization was already initialized");
+        }
         this.resources.register("balance-store", store);
         this.resources.register("player-lifecycle", lifecycleCoordinator);
         this.resources.register("identity-renderer", identityRenderer);
         this.resources.register("feedback-service", feedbackService);
+        this.resources.register("redis-sync", redisCoordinator);
         this.resources.register("award-feedback-coalescer", awardFeedbackCoalescer);
         this.plugin.getServer().getPluginManager().registerEvents(identityInvalidationListener, this.plugin);
         this.resources.register("identity-invalidation-listener", () -> HandlerList.unregisterAll(identityInvalidationListener));
@@ -411,14 +480,24 @@ public final class ProgressEngineRuntime implements AutoCloseable {
         this.plugin.getServer().getPluginManager().registerEvents(listener, this.plugin);
         this.resources.register("player-lifecycle-listener", () -> HandlerList.unregisterAll(listener));
         processAlreadyOnlinePlayers(playerSettings, lifecycleCoordinator);
-        if (this.lifecycle.state() == RuntimeState.STARTING) {
-            this.lifecycle.transitionTo(RuntimeState.READY);
-        }
+        redisCoordinator.activate();
         this.plugin.getLogger().info("ProgressEngine economic runtime initialized. Public service remains hidden until later blocks are complete.");
     }
 
     private PlayerSettingsService resolvePlayerSettingsService() {
         return resolveService(PlayerSettingsService.class, "NetworkPlayerSettings PlayerSettingsService");
+    }
+
+    private void clearEconomicReferences(BalanceStore store, AccountEconomy economy, PlayerLifecycleCoordinator lifecycleCoordinator,
+                                         ProgressPointsService service, LocalizedMessages localizedMessages,
+                                         PlayerIdentityRenderer identityRenderer, FeedbackService feedbackService) {
+        this.balanceStore.compareAndSet(store, null);
+        this.accountEconomy.compareAndSet(economy, null);
+        this.playerLifecycle.compareAndSet(lifecycleCoordinator, null);
+        this.pointsService.compareAndSet(service, null);
+        this.localizedMessages.compareAndSet(localizedMessages, null);
+        this.identityRenderer.compareAndSet(identityRenderer, null);
+        this.feedbackService.compareAndSet(feedbackService, null);
     }
 
     private <T> T resolveService(Class<T> type, String displayName) {

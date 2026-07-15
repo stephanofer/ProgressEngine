@@ -17,6 +17,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -25,6 +26,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 public final class BalanceStore implements AutoCloseable {
+    private static final int MAX_MINIMUM_REVISION_REFRESH_ATTEMPTS = 3;
+
     private final Cache<UUID, BalanceSnapshot> snapshots;
     private final ConcurrentHashMap<UUID, CompletableFuture<BalanceSnapshot>> inFlightLoads = new ConcurrentHashMap<>();
     private final AccountSnapshotLoader loader;
@@ -66,12 +69,20 @@ public final class BalanceStore implements AutoCloseable {
         if (existing != null) {
             return CompletableFuture.completedFuture(existing);
         }
-        return coalescedLoad(validPlayerId);
+        return coalescedLoad(validPlayerId, OptionalLong.empty(), 0);
     }
 
     public CompletableFuture<BalanceSnapshot> refresh(UUID playerId) {
         UUID validPlayerId = BinaryUuid.requireValid(playerId, "playerId");
-        return coalescedLoad(validPlayerId);
+        return coalescedLoad(validPlayerId, OptionalLong.empty(), 0);
+    }
+
+    public CompletableFuture<BalanceSnapshot> refreshAtLeast(UUID playerId, long minimumRevision) {
+        UUID validPlayerId = BinaryUuid.requireValid(playerId, "playerId");
+        if (minimumRevision < 0L) {
+            return CompletableFuture.failedFuture(new IllegalArgumentException("minimumRevision cannot be negative"));
+        }
+        return coalescedLoad(validPlayerId, OptionalLong.of(minimumRevision), 0);
     }
 
     public Publication publish(StoredAccount account) {
@@ -126,30 +137,41 @@ public final class BalanceStore implements AutoCloseable {
         this.snapshots.cleanUp();
     }
 
-    private CompletableFuture<BalanceSnapshot> coalescedLoad(UUID playerId) {
+    private CompletableFuture<BalanceSnapshot> coalescedLoad(UUID playerId, OptionalLong minimumRevision, int attempts) {
         if (this.closed.get()) {
             return CompletableFuture.failedFuture(new IllegalStateException("Balance store is closed"));
         }
         while (true) {
             CompletableFuture<BalanceSnapshot> existing = this.inFlightLoads.get(playerId);
             if (existing != null) {
-                return copyOf(existing);
+                return copyOf(existing).thenCompose(snapshot -> ensureMinimumRevision(playerId, snapshot, minimumRevision, attempts));
             }
 
             CompletableFuture<BalanceSnapshot> shared = new CompletableFuture<>();
             if (this.inFlightLoads.putIfAbsent(playerId, shared) == null) {
                 CompletableFuture<BalanceSnapshot> physical = startPhysicalLoad(playerId);
                 physical.whenComplete((value, failure) -> {
+                    this.inFlightLoads.remove(playerId, shared);
                     if (failure != null) {
                         shared.completeExceptionally(failure);
                     } else {
                         shared.complete(value);
                     }
                 });
-                shared.whenComplete((ignored, failure) -> this.inFlightLoads.remove(playerId, shared));
-                return copyOf(shared);
+                return copyOf(shared).thenCompose(snapshot -> ensureMinimumRevision(playerId, snapshot, minimumRevision, attempts));
             }
         }
+    }
+
+    private CompletableFuture<BalanceSnapshot> ensureMinimumRevision(UUID playerId, BalanceSnapshot snapshot, OptionalLong minimumRevision, int attempts) {
+        if (minimumRevision.isPresent() && snapshot.revision() < minimumRevision.getAsLong()) {
+            if (attempts >= MAX_MINIMUM_REVISION_REFRESH_ATTEMPTS) {
+                return CompletableFuture.failedFuture(new IllegalStateException("Loaded revision " + snapshot.revision()
+                    + " is lower than required revision " + minimumRevision.getAsLong() + " for " + playerId));
+            }
+            return coalescedLoad(playerId, minimumRevision, attempts + 1);
+        }
+        return CompletableFuture.completedFuture(snapshot);
     }
 
     private CompletableFuture<BalanceSnapshot> startPhysicalLoad(UUID playerId) {

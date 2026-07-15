@@ -114,7 +114,7 @@ public final class BoostedYamlConfigurationLoader implements ConfigurationLoader
         Map.entry("admin-status-header", Set.of("state")),
         Map.entry("infrastructure-unavailable", Set.of()),
         Map.entry("award-received", Set.of("amount", "amount_raw", "amount_compact", "balance", "balance_raw", "balance_compact")),
-        Map.entry("transfer-received", Set.of("amount", "sender", "balance"))
+        Map.entry("transfer-received", Set.of("amount", "amount_raw", "amount_compact", "sender", "balance", "balance_raw", "balance_compact"))
     );
     private static final Set<String> ALLOWED_ROUTES = Set.of(
         "config-version",

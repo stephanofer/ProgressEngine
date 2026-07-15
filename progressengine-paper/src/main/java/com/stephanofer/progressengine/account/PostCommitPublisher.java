@@ -12,11 +12,18 @@ import java.util.logging.Logger;
 public final class PostCommitPublisher implements AccountPostCommitPublisher {
     private final BalanceStore balanceStore;
     private final PostCommitEventDispatcher eventDispatcher;
+    private final PostCommitNetworkPublisher networkPublisher;
     private final Logger logger;
 
     public PostCommitPublisher(BalanceStore balanceStore, PostCommitEventDispatcher eventDispatcher, Logger logger) {
+        this(balanceStore, eventDispatcher, PostCommitNetworkPublisher.noop(), logger);
+    }
+
+    public PostCommitPublisher(BalanceStore balanceStore, PostCommitEventDispatcher eventDispatcher,
+                               PostCommitNetworkPublisher networkPublisher, Logger logger) {
         this.balanceStore = Objects.requireNonNull(balanceStore, "balanceStore");
         this.eventDispatcher = Objects.requireNonNull(eventDispatcher, "eventDispatcher");
+        this.networkPublisher = PostCommitNetworkPublisher.require(networkPublisher);
         this.logger = Objects.requireNonNull(logger, "logger");
     }
 
@@ -34,6 +41,16 @@ public final class PostCommitPublisher implements AccountPostCommitPublisher {
                 this.logger.log(Level.SEVERE, "Failed to publish committed balance snapshot for operation "
                     + receipt.operationId(), exception);
             }
+        }
+
+        try {
+            this.networkPublisher.publish(receipt).whenComplete((ignored, failure) -> {
+                if (failure != null) {
+                    this.logger.log(Level.WARNING, "Post-commit Redis publication failed for operation " + receipt.operationId(), failure);
+                }
+            });
+        } catch (RuntimeException exception) {
+            this.logger.log(Level.WARNING, "Post-commit Redis publication could not be started for operation " + receipt.operationId(), exception);
         }
 
         CompletableFuture<Void> dispatched;

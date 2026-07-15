@@ -91,6 +91,31 @@ final class BalanceStoreTest {
     }
 
     @Test
+    void refreshAtLeastRetriesAfterSharedLoadReturnsOlderRevision() {
+        UUID playerId = UUID.randomUUID();
+        AtomicInteger physicalLoads = new AtomicInteger();
+        BalanceStore store = store(id -> {
+            int attempt = physicalLoads.incrementAndGet();
+            return CompletableFuture.completedFuture(attempt == 1
+                ? account(id, 10L, 1L)
+                : account(id, 20L, 2L));
+        });
+
+        BalanceSnapshot loaded = store.refreshAtLeast(playerId, 2L).join();
+
+        assertEquals(2L, loaded.revision());
+        assertEquals(2, physicalLoads.get());
+    }
+
+    @Test
+    void refreshAtLeastFailsInsteadOfRetryingForeverForFutureRevision() {
+        UUID playerId = UUID.randomUUID();
+        BalanceStore store = store(id -> CompletableFuture.completedFuture(account(id, 10L, 1L)));
+
+        assertThrows(CompletionException.class, () -> store.refreshAtLeast(playerId, 99L).join());
+    }
+
+    @Test
     void expirationRemovesSnapshotInsteadOfReturningZero() {
         MutableTicker ticker = new MutableTicker();
         UUID playerId = UUID.randomUUID();

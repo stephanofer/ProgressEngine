@@ -10,11 +10,26 @@ val integrationTestSourceSet = sourceSets.create("integrationTest") {
     runtimeClasspath += output + compileClasspath
 }
 
+val redisIntegrationTestSourceSet = sourceSets.create("redisIntegrationTest") {
+    java.srcDir("src/redisIntegrationTest/java")
+    resources.srcDir("src/redisIntegrationTest/resources")
+    compileClasspath += sourceSets.main.get().output + configurations.testRuntimeClasspath.get()
+    runtimeClasspath += output + compileClasspath
+}
+
 configurations.named(integrationTestSourceSet.implementationConfigurationName) {
     extendsFrom(configurations.testImplementation.get())
 }
 
 configurations.named(integrationTestSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom(configurations.testRuntimeOnly.get())
+}
+
+configurations.named(redisIntegrationTestSourceSet.implementationConfigurationName) {
+    extendsFrom(configurations.testImplementation.get())
+}
+
+configurations.named(redisIntegrationTestSourceSet.runtimeOnlyConfigurationName) {
     extendsFrom(configurations.testRuntimeOnly.get())
 }
 
@@ -33,6 +48,22 @@ val validateIntegrationTestEnvironment = tasks.register("validateIntegrationTest
         val missing = names.filter { System.getenv(it).isNullOrBlank() }
         if (missing.isNotEmpty() && missing.size != names.size) {
             throw GradleException("Missing ProgressEngine integration test variables: ${missing.joinToString()}")
+        }
+    }
+}
+
+val validateRedisIntegrationTestEnvironment = tasks.register("validateRedisIntegrationTestEnvironment") {
+    group = "verification"
+    description = "Validates ProgressEngine external Redis integration test environment variables."
+
+    doLast {
+        val required = listOf(
+            "PROGRESSENGINE_TEST_REDIS_HOST",
+            "PROGRESSENGINE_TEST_REDIS_PORT"
+        )
+        val missing = required.filter { System.getenv(it).isNullOrBlank() }
+        if (missing.isNotEmpty() && missing.size != required.size) {
+            throw GradleException("Missing ProgressEngine Redis integration test variables: ${missing.joinToString()}")
         }
     }
 }
@@ -135,6 +166,23 @@ tasks {
             if (missing.isNotEmpty()) {
                 throw GradleException("Missing ProgressEngine integration test variables: ${missing.joinToString()}")
             }
+        }
+    }
+
+    register<Test>("redisIntegrationTest") {
+        description = "Runs ProgressEngine Redis integration tests against externally managed Redis."
+        group = "verification"
+        testClassesDirs = redisIntegrationTestSourceSet.output.classesDirs
+        classpath = redisIntegrationTestSourceSet.runtimeClasspath
+        shouldRunAfter(test)
+        dependsOn(validateRedisIntegrationTestEnvironment)
+
+        onlyIf("ProgressEngine external Redis host and port are configured") {
+            val required = listOf(
+                "PROGRESSENGINE_TEST_REDIS_HOST",
+                "PROGRESSENGINE_TEST_REDIS_PORT"
+            )
+            required.all { !System.getenv(it).isNullOrBlank() }
         }
     }
 }

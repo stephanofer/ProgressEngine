@@ -9,6 +9,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -133,6 +134,13 @@ public final class PlayerLifecycleCoordinator implements PlayerReadiness, AutoCl
         UUID validPlayerId = BinaryUuid.requireValid(playerId, "playerId");
         PlayerSession session = this.sessions.get(validPlayerId);
         return session != null && session.status() == PlayerSessionStatus.READY && session.isCurrent();
+    }
+
+    public Set<UUID> readyPlayerIds() {
+        return this.sessions.values().stream()
+            .filter(session -> session.status() == PlayerSessionStatus.READY && session.isCurrent())
+            .map(PlayerSession::playerId)
+            .collect(java.util.stream.Collectors.toUnmodifiableSet());
     }
 
     @Override

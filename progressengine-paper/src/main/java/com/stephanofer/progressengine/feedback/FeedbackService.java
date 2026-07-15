@@ -50,6 +50,11 @@ public final class FeedbackService implements Listener, AutoCloseable {
         sendPlayer(playerId, "award-received", language -> awardArguments(amount, balance, language));
     }
 
+    public void sendTransferReceived(UUID playerId, Component sender, long amount, long balance) {
+        Objects.requireNonNull(sender, "sender");
+        sendPlayer(playerId, "transfer-received", language -> transferArguments(sender, amount, balance, language));
+    }
+
     public void sendPlayer(UUID playerId, String feedbackKey, ArgumentFactory arguments) {
         Objects.requireNonNull(playerId, "playerId");
         Objects.requireNonNull(feedbackKey, "feedbackKey");
@@ -136,6 +141,18 @@ public final class FeedbackService implements Listener, AutoCloseable {
 
     private MessageArguments awardArguments(long amount, long balance, String language) {
         return MessageArguments.builder()
+            .unparsed("amount", this.messages.formatted(amount, language))
+            .unparsed("amount_raw", this.messages.raw(amount))
+            .unparsed("amount_compact", this.messages.compact(amount, language))
+            .unparsed("balance", this.messages.formatted(balance, language))
+            .unparsed("balance_raw", this.messages.raw(balance))
+            .unparsed("balance_compact", this.messages.compact(balance, language))
+            .build();
+    }
+
+    private MessageArguments transferArguments(Component sender, long amount, long balance, String language) {
+        return MessageArguments.builder()
+            .component("sender", sender)
             .unparsed("amount", this.messages.formatted(amount, language))
             .unparsed("amount_raw", this.messages.raw(amount))
             .unparsed("amount_compact", this.messages.compact(amount, language))
