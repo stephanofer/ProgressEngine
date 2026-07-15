@@ -53,6 +53,7 @@ final class PersistenceValueTest {
             OperationType.CREDIT,
             playerId,
             Optional.empty(),
+            Optional.empty(),
             100L,
             OperationActor.plugin(),
             new OperationSource("TestPlugin", "server-1"),
@@ -84,6 +85,7 @@ final class PersistenceValueTest {
             OperationType.TRANSFER,
             playerId,
             Optional.of(receiverId),
+            Optional.empty(),
             100L,
             OperationActor.plugin(),
             new OperationSource("TestPlugin", "server-1"),
@@ -94,12 +96,12 @@ final class PersistenceValueTest {
 
         assertEquals(Optional.of(receiverId), transfer.relatedPlayerId());
         assertThrows(IllegalArgumentException.class, () -> new OperationDraft(
-            OperationId.generate(), 1, fingerprint, OperationType.TRANSFER, playerId, Optional.empty(), 100L,
+            OperationId.generate(), 1, fingerprint, OperationType.TRANSFER, playerId, Optional.empty(), Optional.empty(), 100L,
             OperationActor.plugin(), new OperationSource("TestPlugin", "server-1"), OperationReason.of("test:transfer"),
             OperationMetadata.empty(), Instant.EPOCH
         ));
         assertThrows(IllegalArgumentException.class, () -> new OperationDraft(
-            OperationId.generate(), 1, fingerprint, OperationType.CREDIT, playerId, Optional.of(receiverId), 100L,
+            OperationId.generate(), 1, fingerprint, OperationType.CREDIT, playerId, Optional.of(receiverId), Optional.empty(), 100L,
             OperationActor.plugin(), new OperationSource("TestPlugin", "server-1"), OperationReason.of("test:credit"),
             OperationMetadata.empty(), Instant.EPOCH
         ));
@@ -156,6 +158,7 @@ final class PersistenceValueTest {
             OperationType.CREDIT,
             OperationStatus.PENDING,
             UUID.randomUUID(),
+            Optional.empty(),
             Optional.empty(),
             100L,
             OperationActor.plugin(),
@@ -214,6 +217,7 @@ final class PersistenceValueTest {
             OperationStatus.SUCCESS,
             playerId,
             relatedPlayerId,
+            Optional.empty(),
             amount,
             OperationActor.plugin(),
             new OperationSource("TestPlugin", "server-1"),

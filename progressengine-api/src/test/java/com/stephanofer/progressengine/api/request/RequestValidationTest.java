@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.stephanofer.progressengine.api.operation.OperationId;
 import com.stephanofer.progressengine.api.operation.OperationReason;
+import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
@@ -49,5 +50,13 @@ final class RequestValidationTest {
         UUID nil = new UUID(0L, 0L);
 
         assertThrows(IllegalArgumentException.class, () -> new ResetBalanceRequest(OPERATION_ID, nil, REASON));
+    }
+
+    @Test
+    void awardGameIdIsNormalizedAndValidated() {
+        AwardRequest scoped = new AwardRequest(OPERATION_ID, PLAYER, 10L, REASON, " SkyWars ");
+
+        assertEquals(Optional.of("skywars"), scoped.gameId());
+        assertThrows(IllegalArgumentException.class, () -> new AwardRequest(OPERATION_ID, PLAYER, 10L, REASON, "bad/id"));
     }
 }

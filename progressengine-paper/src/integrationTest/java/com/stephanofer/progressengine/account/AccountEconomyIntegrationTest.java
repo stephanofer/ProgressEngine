@@ -9,11 +9,14 @@ import com.stephanofer.progressengine.api.operation.OperationId;
 import com.stephanofer.progressengine.api.operation.OperationMetadata;
 import com.stephanofer.progressengine.api.operation.OperationReason;
 import com.stephanofer.progressengine.api.operation.ReplayStatus;
+import com.stephanofer.progressengine.api.request.AwardRequest;
 import com.stephanofer.progressengine.api.request.CreditRequest;
 import com.stephanofer.progressengine.api.request.DebitRequest;
 import com.stephanofer.progressengine.api.request.ResetBalanceRequest;
 import com.stephanofer.progressengine.api.request.SetBalanceRequest;
 import com.stephanofer.progressengine.api.request.TransferRequest;
+import com.stephanofer.progressengine.api.result.AwardCalculation;
+import com.stephanofer.progressengine.api.result.AwardResult;
 import com.stephanofer.progressengine.api.result.CreditResult;
 import com.stephanofer.progressengine.api.result.DebitResult;
 import com.stephanofer.progressengine.api.result.ResetBalanceResult;
@@ -25,7 +28,9 @@ import com.stephanofer.progressengine.persistence.OperationStatus;
 import com.stephanofer.progressengine.persistence.PersistenceIntegrationTestSupport;
 import com.stephanofer.progressengine.persistence.ProgressPersistence;
 import com.stephanofer.progressengine.persistence.StoredOperation;
+import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -39,6 +44,7 @@ final class AccountEconomyIntegrationTest extends PersistenceIntegrationTestSupp
     private static final OperationReason SET_REASON = OperationReason.of("test:set");
     private static final OperationReason RESET_REASON = OperationReason.of("test:reset");
     private static final OperationReason TRANSFER_REASON = OperationReason.of("test:transfer");
+    private static final OperationReason AWARD_REASON = OperationReason.of("test:award");
 
     @Test
     void creditReplayConflictAndCrossServerRetryUseDurableResult() {
@@ -423,11 +429,130 @@ final class AccountEconomyIntegrationTest extends PersistenceIntegrationTestSupp
         }
     }
 
+    @Test
+    void awardPersistsCalculationGameContextAndReplaysDurably() {
+        ProgressPersistence persistence = createPersistence();
+        try {
+            persistence.migrate().join();
+            UUID playerId = UUID.randomUUID();
+            OperationId operationId = OperationId.generate();
+            AccountEconomy economy = economy(persistence, "server-a", 1_000L);
+            AwardRequest request = awardRequest(operationId, playerId, "skywars");
+            AwardCalculation calculation = calculation(10L, 12L, "2.5", "30.0", 30L, true);
+
+            AwardResult.Success success = assertInstanceOf(AwardResult.Success.class,
+                economy.award(new OperationSource("GameplayPlugin", "server-a"), request, calculation, 1_000L).join());
+            AwardResult.Success replay = assertInstanceOf(AwardResult.Success.class,
+                economy.award(new OperationSource("GameplayPlugin", "server-b"), request, calculation, 1_000L).join());
+            AwardResult conflict = economy.award(
+                new OperationSource("GameplayPlugin", "server-a"),
+                awardRequest(operationId, playerId, "bedwars"),
+                calculation,
+                1_000L
+            ).join();
+
+            StoredOperation stored = persistence.operations().find(operationId).join().orElseThrow();
+            assertEquals(OperationStatus.SUCCESS, stored.status());
+            assertEquals(Optional.of("skywars"), stored.gameId());
+            assertEquals(10L, stored.requestedAmount());
+            assertEquals(30L, success.receipt().changes().getFirst().delta());
+            assertEquals(ReplayStatus.REPLAYED, replay.replayStatus());
+            assertEquals("server-a", replay.receipt().source().serverId());
+            assertEquals(new BigDecimal("30.0"), replay.calculation().calculatedAmount());
+            assertInstanceOf(AwardResult.IdempotencyConflict.class, conflict);
+            assertEquals(30L, persistence.accounts().find(playerId).join().orElseThrow().balance());
+            assertEquals(1, persistence.ledger().findByOperation(operationId).join().size());
+        } finally {
+            cleanup(persistence);
+        }
+    }
+
+    @Test
+    void cancelledAndNoPointsAwardsAreDurableWithoutLedger() {
+        ProgressPersistence persistence = createPersistence();
+        try {
+            persistence.migrate().join();
+            UUID playerId = UUID.randomUUID();
+            AccountEconomy economy = economy(persistence, "server-a", 1_000L);
+            OperationSource source = new OperationSource("GameplayPlugin", "server-a");
+            OperationId cancelledId = OperationId.generate();
+            OperationId noPointsId = OperationId.generate();
+
+            AwardResult.Cancelled cancelled = assertInstanceOf(AwardResult.Cancelled.class,
+                economy.cancelAward(source, awardRequest(cancelledId, playerId, "skywars")).join());
+            AwardResult.Cancelled replay = assertInstanceOf(AwardResult.Cancelled.class,
+                economy.cancelAward(source, awardRequest(cancelledId, playerId, "skywars")).join());
+            AwardCalculation zero = calculation(10L, 1L, "0.5", "0.5", 0L, true);
+            AwardResult.NoPointsAwarded noPoints = assertInstanceOf(AwardResult.NoPointsAwarded.class,
+                economy.award(source, awardRequest(noPointsId, playerId, "skywars"), zero, 1_000L).join());
+
+            assertEquals(ReplayStatus.ORIGINAL, cancelled.replayStatus());
+            assertEquals(ReplayStatus.REPLAYED, replay.replayStatus());
+            assertEquals(ReplayStatus.ORIGINAL, noPoints.replayStatus());
+            assertEquals(OperationStatus.CANCELLED, persistence.operations().find(cancelledId).join().orElseThrow().status());
+            assertEquals(OperationStatus.NO_POINTS_AWARDED, persistence.operations().find(noPointsId).join().orElseThrow().status());
+            assertTrue(persistence.ledger().findByOperation(cancelledId).join().isEmpty());
+            assertTrue(persistence.ledger().findByOperation(noPointsId).join().isEmpty());
+            assertTrue(persistence.accounts().find(playerId).join().isEmpty());
+        } finally {
+            cleanup(persistence);
+        }
+    }
+
+    @Test
+    void awardOverflowIsDurableBalanceLimitWithoutLedger() {
+        ProgressPersistence persistence = createPersistence();
+        try {
+            persistence.migrate().join();
+            UUID playerId = UUID.randomUUID();
+            OperationId operationId = OperationId.generate();
+            AccountEconomy economy = economy(persistence, "server-a", Long.MAX_VALUE);
+            AwardCalculation overflowing = calculation(10L, 10L, "1", "9223372036854775808", Long.MAX_VALUE, true);
+
+            AwardResult.BalanceLimitExceeded result = assertInstanceOf(AwardResult.BalanceLimitExceeded.class,
+                economy.award(new OperationSource("GameplayPlugin", "server-a"), awardRequest(operationId, playerId, "skywars"),
+                    overflowing, Long.MAX_VALUE).join());
+
+            assertEquals(ReplayStatus.ORIGINAL, result.replayStatus());
+            assertEquals(OperationStatus.BALANCE_LIMIT_EXCEEDED, persistence.operations().find(operationId).join().orElseThrow().status());
+            assertTrue(persistence.ledger().findByOperation(operationId).join().isEmpty());
+            assertTrue(persistence.accounts().find(playerId).join().isEmpty());
+        } finally {
+            cleanup(persistence);
+        }
+    }
+
     private static AccountEconomy economy(ProgressPersistence persistence, String serverId, long maximumBalance) {
         return new AccountEconomy(
             persistence,
             new OperationSource("IntegrationTest", serverId),
             () -> maximumBalance
+        );
+    }
+
+    private static AwardRequest awardRequest(OperationId operationId, UUID playerId, String gameId) {
+        return new AwardRequest(
+            operationId,
+            playerId,
+            10L,
+            AWARD_REASON,
+            Optional.of(gameId),
+            com.stephanofer.progressengine.api.source.OperationActor.plugin(),
+            OperationMetadata.empty()
+        );
+    }
+
+    private static AwardCalculation calculation(long requested, long prepared, String multiplier, String calculated, long finalAmount,
+                                                boolean boostersEvaluated) {
+        return new AwardCalculation(
+            requested,
+            prepared,
+            new BigDecimal(multiplier),
+            new BigDecimal(calculated),
+            finalAmount,
+            List.of("personal_points_x2"),
+            false,
+            boostersEvaluated
         );
     }
 }

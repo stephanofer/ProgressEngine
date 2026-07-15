@@ -5,17 +5,23 @@ import com.stephanofer.progressengine.account.BalanceStore;
 import com.stephanofer.progressengine.account.BukkitPostCommitEventDispatcher;
 import com.stephanofer.progressengine.account.PostCommitPublisher;
 import com.stephanofer.progressengine.api.source.OperationSource;
+import com.stephanofer.progressengine.award.AwardCoordinator;
+import com.stephanofer.progressengine.award.BukkitAwardPrepareEventDispatcher;
+import com.stephanofer.progressengine.booster.AwardBoosterCalculator;
+import com.stephanofer.progressengine.booster.NetworkBoostersIntegrationFactory;
 import com.stephanofer.progressengine.config.BoostedYamlConfigurationLoader;
 import com.stephanofer.progressengine.config.ConfigurationManager;
 import com.stephanofer.progressengine.config.ConfigurationProblem;
 import com.stephanofer.progressengine.config.ConfigurationReloadResult;
 import com.stephanofer.progressengine.config.ConfigurationSnapshot;
+import com.stephanofer.progressengine.config.ProgressEngineConfig;
 import com.stephanofer.progressengine.lifecycle.InFlightTracker;
 import com.stephanofer.progressengine.lifecycle.LifecycleResources;
 import com.stephanofer.progressengine.lifecycle.RuntimeLifecycle;
 import com.stephanofer.progressengine.lifecycle.RuntimeState;
 import com.stephanofer.progressengine.persistence.ProgressDatabaseFactory;
 import com.stephanofer.progressengine.persistence.ProgressPersistence;
+import com.stephanofer.progressengine.service.ProgressPointsService;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.Objects;
@@ -36,6 +42,7 @@ public final class ProgressEngineRuntime implements AutoCloseable {
     private final AtomicReference<ProgressPersistence> persistence = new AtomicReference<>();
     private final AtomicReference<BalanceStore> balanceStore = new AtomicReference<>();
     private final AtomicReference<AccountEconomy> accountEconomy = new AtomicReference<>();
+    private final AtomicReference<ProgressPointsService> pointsService = new AtomicReference<>();
 
     private ProgressEngineRuntime(
         JavaPlugin plugin,
@@ -116,6 +123,14 @@ public final class ProgressEngineRuntime implements AutoCloseable {
         AccountEconomy value = this.accountEconomy.get();
         if (value == null) {
             throw new IllegalStateException("ProgressEngine account economy is not initialized");
+        }
+        return value;
+    }
+
+    public ProgressPointsService pointsService() {
+        ProgressPointsService value = this.pointsService.get();
+        if (value == null) {
+            throw new IllegalStateException("ProgressEngine points service is not initialized");
         }
         return value;
     }
@@ -220,6 +235,20 @@ public final class ProgressEngineRuntime implements AutoCloseable {
             new com.stephanofer.progressengine.transaction.AccountMutationSequencer(),
             postCommitPublisher
         );
+        AwardBoosterCalculator boosterCalculator = createAwardBoosterCalculator(snapshot);
+        AwardCoordinator awardCoordinator = new AwardCoordinator(
+            economy,
+            new BukkitAwardPrepareEventDispatcher(this.plugin, this.plugin.getLogger()),
+            boosterCalculator,
+            this::activeConfig
+        );
+        ProgressPointsService service = new ProgressPointsService(
+            store,
+            economy,
+            awardCoordinator,
+            this.inFlightTracker,
+            this::activeConfig
+        );
 
         if (!this.balanceStore.compareAndSet(null, store)) {
             store.close();
@@ -229,8 +258,32 @@ public final class ProgressEngineRuntime implements AutoCloseable {
             store.close();
             throw new IllegalStateException("ProgressEngine account economy was already initialized");
         }
+        if (!this.pointsService.compareAndSet(null, service)) {
+            store.close();
+            throw new IllegalStateException("ProgressEngine points service was already initialized");
+        }
         this.resources.register("balance-store", store);
-        this.plugin.getLogger().info("ProgressEngine cache and post-commit runtime initialized. Public service remains hidden until later blocks are complete.");
+        if (this.lifecycle.state() == RuntimeState.STARTING) {
+            this.lifecycle.transitionTo(RuntimeState.READY);
+        }
+        this.plugin.getLogger().info("ProgressEngine economic runtime initialized. Public service remains hidden until later blocks are complete.");
+    }
+
+    private AwardBoosterCalculator createAwardBoosterCalculator(ConfigurationSnapshot snapshot) {
+        if (!snapshot.config().integrations().networkBoostersEnabled()) {
+            return AwardBoosterCalculator.disabled();
+        }
+        org.bukkit.plugin.Plugin boostersPlugin = this.plugin.getServer().getPluginManager().getPlugin("NetworkBoosters");
+        if (boostersPlugin == null || !boostersPlugin.isEnabled()) {
+            return AwardBoosterCalculator.disabled();
+        }
+        return NetworkBoostersIntegrationFactory.create(this.plugin, true);
+    }
+
+    private ProgressEngineConfig activeConfig() {
+        return this.configurationManager.activeSnapshot()
+            .map(ConfigurationSnapshot::config)
+            .orElseThrow(() -> new IllegalStateException("ProgressEngine configuration is not initialized"));
     }
 
     private void transitionDatabaseUnavailable() {

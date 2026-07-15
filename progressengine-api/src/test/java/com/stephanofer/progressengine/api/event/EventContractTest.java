@@ -11,6 +11,7 @@ import com.stephanofer.progressengine.api.operation.OperationId;
 import com.stephanofer.progressengine.api.operation.OperationMetadata;
 import com.stephanofer.progressengine.api.operation.OperationReason;
 import com.stephanofer.progressengine.api.request.AwardRequest;
+import com.stephanofer.progressengine.api.source.OperationSource;
 import com.stephanofer.progressengine.api.transaction.BalanceChange;
 import java.time.Instant;
 import java.util.Optional;
@@ -42,9 +43,11 @@ final class EventContractTest {
             OperationMetadata.empty()
         );
 
-        PointsAwardPrepareEvent event = new PointsAwardPrepareEvent(request);
+        PointsAwardPrepareEvent event = new PointsAwardPrepareEvent(request, new OperationSource("TestPlugin", "server-1"));
 
         assertEquals(10L, event.requestedBaseAmount());
+        assertTrue(event.gameId().isEmpty());
+        assertEquals("TestPlugin", event.source().pluginName());
         event.setPreparedBaseAmount(12L);
         assertEquals(12L, event.preparedBaseAmount());
         assertFalse(event.isCancelled());

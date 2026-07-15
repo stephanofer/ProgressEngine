@@ -4,6 +4,7 @@ public enum OperationStatus {
     PENDING,
     SUCCESS,
     NO_POINTS_AWARDED,
+    CANCELLED,
     INSUFFICIENT_FUNDS,
     BALANCE_LIMIT_EXCEEDED
 }

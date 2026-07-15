@@ -261,13 +261,13 @@ Se aplican estas reglas durante todo el plan:
 
 **El bloque se considera terminado cuando:**
 
-- [ ] Una revisión vieja nunca reemplaza una nueva.
-- [ ] Ausencia de snapshot permanece distinguible de balance cero.
-- [ ] Caché y eventos solo reflejan commits confirmados.
-- [ ] Los futures respetan el orden observable definido.
-- [ ] Lecturas cacheadas son O(1) y no ejecutan I/O.
+- [x] Una revisión vieja nunca reemplaza una nueva.
+- [x] Ausencia de snapshot permanece distinguible de balance cero.
+- [x] Caché y eventos solo reflejan commits confirmados.
+- [x] Los futures respetan el orden observable definido.
+- [x] Lecturas cacheadas son O(1) y no ejecutan I/O.
 
-**Constancia de cierre:** [ ] Terminado | Fecha: __________ | 
+**Constancia de cierre:** [x] Terminado | Fecha: 7/14/26 | 
 
 ## Bloque 7: NetworkBoosters y awards
 

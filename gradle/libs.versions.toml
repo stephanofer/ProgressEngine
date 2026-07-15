@@ -4,6 +4,7 @@ shadow = "9.5.1"
 network-player-settings = "2.0.0"
 luckperms = "5.5"
 placeholder-api = "2.12.3"
+network-boosters = "1.0.0"
 craftkit = "1.2.0"
 boosted-yaml = "1.3.7"
 caffeine = "3.2.4"
@@ -16,6 +17,7 @@ paper-api = { module = "io.papermc.paper:paper-api", version.ref = "paper-api" }
 network-player-settings = { module = "com.stephanofer:networkplayersettings", version.ref = "network-player-settings" }
 luckperms-api = { module = "net.luckperms:api", version.ref = "luckperms" }
 placeholder-api = { module = "me.clip:placeholderapi", version.ref = "placeholder-api" }
+network-boosters-api = { module = "com.stephanofer:networkboosters-api", version.ref = "network-boosters" }
 craftkit-database = { module = "com.hera.craftkit:craftkit-database", version.ref = "craftkit" }
 craftkit-redis = { module = "com.hera.craftkit:craftkit-redis", version.ref = "craftkit" }
 boosted-yaml = { module = "dev.dejvokep:boosted-yaml", version.ref = "boosted-yaml" }

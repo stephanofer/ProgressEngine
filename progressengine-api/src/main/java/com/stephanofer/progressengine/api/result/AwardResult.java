@@ -51,19 +51,21 @@ public sealed interface AwardResult permits AwardResult.Success, AwardResult.NoP
     }
 
     /** Award rejected because the balance maximum would be exceeded. */
-    record BalanceLimitExceeded(OperationId operationId, ReplayStatus replayStatus) implements AwardResult {
+    record BalanceLimitExceeded(OperationId operationId, AwardCalculation calculation, ReplayStatus replayStatus) implements AwardResult {
         /** Creates a balance-limit result. */
         public BalanceLimitExceeded {
             if (operationId == null) throw new NullPointerException("operationId cannot be null");
+            if (calculation == null) throw new NullPointerException("calculation cannot be null");
             if (replayStatus == null) throw new NullPointerException("replayStatus cannot be null");
         }
     }
 
-    /** Award cancelled by the prepare event before persistence. */
-    record Cancelled(OperationId operationId) implements AwardResult {
+    /** Award cancelled by the prepare event without a balance movement. */
+    record Cancelled(OperationId operationId, ReplayStatus replayStatus) implements AwardResult {
         /** Creates a cancelled result. */
         public Cancelled {
             if (operationId == null) throw new NullPointerException("operationId cannot be null");
+            if (replayStatus == null) throw new NullPointerException("replayStatus cannot be null");
         }
     }
 

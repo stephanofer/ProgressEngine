@@ -39,6 +39,20 @@ final class OperationFingerprintTest {
     }
 
     @Test
+    void awardGameIdChangesVersionedFingerprint() {
+        byte[] skywars = OperationFingerprint.current(OperationType.AWARD, this.playerId, Optional.empty(), Optional.of("skywars"),
+            100L, this.reason, OperationActor.plugin(), "TestPlugin");
+        byte[] bedwars = OperationFingerprint.current(OperationType.AWARD, this.playerId, Optional.empty(), Optional.of("bedwars"),
+            100L, this.reason, OperationActor.plugin(), "TestPlugin");
+
+        assertFalse(Arrays.equals(skywars, bedwars));
+        assertTrue(OperationFingerprint.matches(skywars, OperationFingerprint.CURRENT_VERSION, OperationType.AWARD,
+            this.playerId, Optional.empty(), Optional.of("skywars"), 100L, this.reason, OperationActor.plugin(), "TestPlugin"));
+        assertFalse(OperationFingerprint.matches(skywars, OperationFingerprint.CURRENT_VERSION, OperationType.AWARD,
+            this.playerId, Optional.empty(), Optional.of("bedwars"), 100L, this.reason, OperationActor.plugin(), "TestPlugin"));
+    }
+
+    @Test
     void transferFingerprintIsDirectionalAndIncludesReceiver() {
         UUID receiver = UUID.fromString("223e4567-e89b-12d3-a456-426614174000");
         UUID otherReceiver = UUID.fromString("323e4567-e89b-12d3-a456-426614174000");

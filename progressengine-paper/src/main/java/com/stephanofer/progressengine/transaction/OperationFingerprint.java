@@ -16,23 +16,37 @@ import java.util.Optional;
 import java.util.UUID;
 
 public final class OperationFingerprint {
-    public static final int CURRENT_VERSION = 1;
+    public static final int CURRENT_VERSION = 2;
     private static final UUID NIL = new UUID(0L, 0L);
 
     private OperationFingerprint() {
     }
 
     public static byte[] current(OperationType type, UUID playerId, Optional<UUID> relatedPlayerId, long amount,
-                                 OperationReason reason, OperationActor actor, String sourcePlugin) {
-        return versioned(CURRENT_VERSION, type, playerId, relatedPlayerId, amount, reason, actor, sourcePlugin);
+                                  OperationReason reason, OperationActor actor, String sourcePlugin) {
+        return current(type, playerId, relatedPlayerId, Optional.empty(), amount, reason, actor, sourcePlugin);
+    }
+
+    public static byte[] current(OperationType type, UUID playerId, Optional<UUID> relatedPlayerId, Optional<String> gameId, long amount,
+                                  OperationReason reason, OperationActor actor, String sourcePlugin) {
+        return versioned(CURRENT_VERSION, type, playerId, relatedPlayerId, gameId, amount, reason, actor, sourcePlugin);
     }
 
     public static byte[] versioned(int version, OperationType type, UUID playerId, Optional<UUID> relatedPlayerId,
                                    long amount, OperationReason reason, OperationActor actor, String sourcePlugin) {
+        return versioned(version, type, playerId, relatedPlayerId, Optional.empty(), amount, reason, actor, sourcePlugin);
+    }
+
+    public static byte[] versioned(int version, OperationType type, UUID playerId, Optional<UUID> relatedPlayerId,
+                                   Optional<String> gameId, long amount, OperationReason reason, OperationActor actor,
+                                   String sourcePlugin) {
+        if (version == 1) {
+            return sha256(canonicalV1(type, playerId, relatedPlayerId, amount, reason, actor, sourcePlugin));
+        }
         if (version != CURRENT_VERSION) {
             throw new IllegalArgumentException("Unsupported operation fingerprint version: " + version);
         }
-        return sha256(canonicalV1(type, playerId, relatedPlayerId, amount, reason, actor, sourcePlugin));
+        return sha256(canonicalV2(type, playerId, relatedPlayerId, gameId, amount, reason, actor, sourcePlugin));
     }
 
     public static boolean matches(byte[] storedFingerprint, int storedVersion, OperationType type, UUID playerId,
@@ -42,8 +56,15 @@ public final class OperationFingerprint {
         return MessageDigest.isEqual(Objects.requireNonNull(storedFingerprint, "storedFingerprint"), recalculated);
     }
 
+    public static boolean matches(byte[] storedFingerprint, int storedVersion, OperationType type, UUID playerId,
+                                  Optional<UUID> relatedPlayerId, Optional<String> gameId, long amount,
+                                  OperationReason reason, OperationActor actor, String sourcePlugin) {
+        byte[] recalculated = versioned(storedVersion, type, playerId, relatedPlayerId, gameId, amount, reason, actor, sourcePlugin);
+        return MessageDigest.isEqual(Objects.requireNonNull(storedFingerprint, "storedFingerprint"), recalculated);
+    }
+
     private static byte[] canonicalV1(OperationType type, UUID playerId, Optional<UUID> relatedPlayerId, long amount,
-                                      OperationReason reason, OperationActor actor, String sourcePlugin) {
+                                       OperationReason reason, OperationActor actor, String sourcePlugin) {
         Objects.requireNonNull(type, "type");
         requireUuid(playerId, "playerId");
         Objects.requireNonNull(relatedPlayerId, "relatedPlayerId");
@@ -60,7 +81,7 @@ public final class OperationFingerprint {
             ByteArrayOutputStream bytes = new ByteArrayOutputStream(128);
             DataOutputStream out = new DataOutputStream(bytes);
             out.writeInt(0x50454F50); // PEOP
-            out.writeShort(CURRENT_VERSION);
+            out.writeShort(1);
             out.writeByte(typeToken(type));
             writeUuid(out, playerId);
             writeOptionalUuid(out, relatedPlayerId);
@@ -73,6 +94,26 @@ public final class OperationFingerprint {
             return bytes.toByteArray();
         } catch (IOException exception) {
             throw new IllegalStateException("Failed to build operation fingerprint", exception);
+        }
+    }
+
+    private static byte[] canonicalV2(OperationType type, UUID playerId, Optional<UUID> relatedPlayerId, Optional<String> gameId,
+                                      long amount, OperationReason reason, OperationActor actor, String sourcePlugin) {
+        Objects.requireNonNull(gameId, "gameId");
+        byte[] legacy = canonicalV1(type, playerId, relatedPlayerId, amount, reason, actor, sourcePlugin);
+        try {
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream(legacy.length + 80);
+            DataOutputStream out = new DataOutputStream(bytes);
+            out.writeInt(0x50454F50); // PEOP
+            out.writeShort(CURRENT_VERSION);
+            out.write(legacy);
+            writeOptionalString(out, gameId);
+            out.flush();
+            return bytes.toByteArray();
+        } catch (IOException exception) {
+            throw new IllegalStateException("Failed to build operation fingerprint", exception);
+        } finally {
+            Arrays.fill(legacy, (byte) 0);
         }
     }
 
@@ -104,6 +145,15 @@ public final class OperationFingerprint {
         byte[] encoded = value.getBytes(StandardCharsets.UTF_8);
         out.writeInt(encoded.length);
         out.write(encoded);
+    }
+
+    private static void writeOptionalString(DataOutputStream out, Optional<String> value) throws IOException {
+        if (value.isPresent()) {
+            out.writeByte(1);
+            writeString(out, value.get());
+        } else {
+            out.writeByte(0);
+        }
     }
 
     private static int typeToken(OperationType type) {

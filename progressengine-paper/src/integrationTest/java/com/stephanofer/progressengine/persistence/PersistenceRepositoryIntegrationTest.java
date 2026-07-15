@@ -41,6 +41,7 @@ final class PersistenceRepositoryIntegrationTest extends PersistenceIntegrationT
                 OperationType.CREDIT,
                 playerId,
                 Optional.empty(),
+                Optional.empty(),
                 0L,
                 OperationActor.plugin(),
                 new OperationSource("IntegrationTest", "server-1"),

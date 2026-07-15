@@ -2,6 +2,7 @@ package com.stephanofer.progressengine.api.result;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.stephanofer.progressengine.api.operation.OperationId;
 import com.stephanofer.progressengine.api.operation.OperationMetadata;
@@ -38,11 +39,15 @@ final class ResultValidationTest {
 
     @Test
     void awardCalculationIsImmutableAndPositive() {
-        AwardCalculation calculation = new AwardCalculation(10L, 12L, BigDecimal.ONE, 12L, List.of("booster:test"), false);
+        AwardCalculation calculation = new AwardCalculation(10L, 12L, BigDecimal.ONE, BigDecimal.valueOf(12), 12L,
+            List.of("booster:test"), false, true);
 
         assertEquals(12L, calculation.finalAmount());
+        assertEquals(BigDecimal.valueOf(12), calculation.calculatedAmount());
+        assertTrue(calculation.boostersEvaluated());
         assertThrows(UnsupportedOperationException.class, () -> calculation.appliedBoosterIds().add("other"));
-        assertEquals(0L, new AwardCalculation(1L, 1L, new BigDecimal("0.5"), 0L, List.of(), false).finalAmount());
+        assertEquals(0L, new AwardCalculation(1L, 1L, new BigDecimal("0.5"), new BigDecimal("0.5"), 0L,
+            List.of(), false, true).finalAmount());
     }
 
     @Test
@@ -52,9 +57,11 @@ final class ResultValidationTest {
             1L,
             1L,
             new BigDecimal("0.5"),
+            new BigDecimal("0.5"),
             0L,
             List.of(),
-            false
+            false,
+            true
         );
 
         AwardResult.NoPointsAwarded result = new AwardResult.NoPointsAwarded(
@@ -68,7 +75,7 @@ final class ResultValidationTest {
             IllegalArgumentException.class,
             () -> new AwardResult.NoPointsAwarded(
                 operationId,
-                new AwardCalculation(1L, 1L, BigDecimal.ONE, 1L, List.of(), false),
+                new AwardCalculation(1L, 1L, BigDecimal.ONE, BigDecimal.ONE, 1L, List.of(), false, true),
                 ReplayStatus.ORIGINAL
             )
         );

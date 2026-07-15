@@ -42,6 +42,7 @@ dependencies {
 
     compileOnly(libs.paper.api)
     compileOnly(libs.network.player.settings)
+    compileOnly(libs.network.boosters.api)
     compileOnly(libs.luckperms.api)
     compileOnly(libs.placeholder.api)
 

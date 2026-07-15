@@ -37,8 +37,8 @@ public final class OperationRepository {
         Objects.requireNonNull(draft, "draft");
         String sql = "INSERT INTO " + this.tables.operations()
             + " (operation_id, fingerprint_version, request_fingerprint, type, status, player_uuid, related_player_uuid, requested_amount, "
-            + "actor_type, actor_uuid, source_plugin, reason_key, server_id, metadata_json, result_version, result_json, created_at, completed_at) "
-            + "VALUES (?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, NULL)";
+            + "game_id, actor_type, actor_uuid, source_plugin, reason_key, server_id, metadata_json, result_version, result_json, created_at, completed_at) "
+            + "VALUES (?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, NULL)";
         try (PreparedStatement statement = connection.prepareStatement(sql)) {
             int index = 1;
             JdbcValues.setUuid(statement, index++, draft.operationId().value());
@@ -48,6 +48,7 @@ public final class OperationRepository {
             JdbcValues.setUuid(statement, index++, draft.playerId());
             JdbcValues.setOptionalUuid(statement, index++, draft.relatedPlayerId());
             statement.setLong(index++, draft.requestedAmount());
+            statement.setString(index++, draft.gameId().orElse(null));
             statement.setString(index++, draft.actor().type().name());
             setActorUuid(statement, index++, draft.actor());
             statement.setString(index++, draft.source().pluginName());
@@ -133,6 +134,7 @@ public final class OperationRepository {
             status,
             JdbcValues.uuid(resultSet, "player_uuid"),
             JdbcValues.optionalUuid(resultSet, "related_player_uuid"),
+            Optional.ofNullable(resultSet.getString("game_id")),
             resultSet.getLong("requested_amount"),
             actor,
             new OperationSource(resultSet.getString("source_plugin"), resultSet.getString("server_id")),

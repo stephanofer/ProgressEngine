@@ -6,11 +6,14 @@ import com.hera.craftkit.database.TransactionRetryPolicy;
 import com.stephanofer.progressengine.api.operation.OperationId;
 import com.stephanofer.progressengine.api.operation.OperationType;
 import com.stephanofer.progressengine.api.operation.ReplayStatus;
+import com.stephanofer.progressengine.api.request.AwardRequest;
 import com.stephanofer.progressengine.api.request.CreditRequest;
 import com.stephanofer.progressengine.api.request.DebitRequest;
 import com.stephanofer.progressengine.api.request.ResetBalanceRequest;
 import com.stephanofer.progressengine.api.request.SetBalanceRequest;
 import com.stephanofer.progressengine.api.request.TransferRequest;
+import com.stephanofer.progressengine.api.result.AwardCalculation;
+import com.stephanofer.progressengine.api.result.AwardResult;
 import com.stephanofer.progressengine.api.result.CreditResult;
 import com.stephanofer.progressengine.api.result.DebitResult;
 import com.stephanofer.progressengine.api.result.ResetBalanceResult;
@@ -33,6 +36,8 @@ import com.stephanofer.progressengine.transaction.CanonicalAccountOrder;
 import com.stephanofer.progressengine.transaction.DecodedOperationResult;
 import com.stephanofer.progressengine.transaction.OperationFingerprint;
 import com.stephanofer.progressengine.transaction.OperationResultCodec;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Statement;
@@ -76,6 +81,42 @@ public final class AccountEconomy {
 
     public CompletableFuture<CreditResult> credit(CreditRequest request) {
         return credit(this.source, request);
+    }
+
+    public CompletableFuture<Optional<AwardResult>> findAwardResult(OperationSource source, AwardRequest request) {
+        Objects.requireNonNull(source, "source");
+        Objects.requireNonNull(request, "request");
+        return this.persistence.operations().find(request.operationId())
+            .thenApply(operation -> operation.map(stored -> toAwardResult(source, request, stored, ReplayStatus.REPLAYED)));
+    }
+
+    public CompletableFuture<AwardResult> cancelAward(OperationSource source, AwardRequest request) {
+        Objects.requireNonNull(source, "source");
+        Objects.requireNonNull(request, "request");
+        return this.sequencer.submit(List.of(request.playerId()), () -> this.persistence.database().transaction(
+            MUTATION_OPTIONS,
+            connection -> executeAwardCancellationTransaction(connection, source, request)
+        )).thenApply(outcome -> toAwardResult(request.operationId(), outcome));
+    }
+
+    public CompletableFuture<AwardResult> award(OperationSource source, AwardRequest request, AwardCalculation calculation) {
+        Objects.requireNonNull(source, "source");
+        Objects.requireNonNull(request, "request");
+        Objects.requireNonNull(calculation, "calculation");
+        return award(source, request, calculation, this.maximumBalance.getAsLong());
+    }
+
+    public CompletableFuture<AwardResult> award(OperationSource source, AwardRequest request, AwardCalculation calculation, long maximumBalance) {
+        Objects.requireNonNull(source, "source");
+        Objects.requireNonNull(request, "request");
+        Objects.requireNonNull(calculation, "calculation");
+        if (maximumBalance < 1L) {
+            return CompletableFuture.failedFuture(new IllegalStateException("maximumBalance must be positive"));
+        }
+        return this.sequencer.submit(List.of(request.playerId()), () -> this.persistence.database().transaction(
+            MUTATION_OPTIONS,
+            connection -> executeAwardTransaction(connection, source, request, calculation, maximumBalance)
+        ).thenCompose(this::publishOriginalSuccess)).thenApply(outcome -> toAwardResult(request.operationId(), outcome));
     }
 
     public CompletableFuture<CreditResult> credit(OperationSource source, CreditRequest request) {
@@ -164,6 +205,7 @@ public final class AccountEconomy {
                 intent.type(),
                 intent.playerId(),
                 Optional.empty(),
+                Optional.empty(),
                 intent.requestedAmount(),
                 intent.reason(),
                 intent.actor(),
@@ -171,6 +213,7 @@ public final class AccountEconomy {
             ),
             intent.type(),
             intent.playerId(),
+            Optional.empty(),
             Optional.empty(),
             intent.requestedAmount(),
             intent.actor(),
@@ -246,6 +289,123 @@ public final class AccountEconomy {
         return new AccountMutationOutcome.Success(receipt, ReplayStatus.ORIGINAL);
     }
 
+    private AccountMutationOutcome executeAwardCancellationTransaction(Connection connection, OperationSource source, AwardRequest request)
+        throws SQLException {
+        Instant timestamp = databaseTimestamp(connection);
+        OperationDraft draft = awardDraft(source, request, timestamp);
+        OperationReservation reservation = this.persistence.operations().reserve(connection, draft);
+        if (reservation instanceof OperationReservation.Existing existing) {
+            return awardReplayOrConflict(source, request, existing.operation(), ReplayStatus.REPLAYED);
+        }
+        this.persistence.operations().complete(connection, new OperationCompletion(
+            request.operationId(),
+            OperationStatus.CANCELLED,
+            OperationResultCodec.rejectionPayload(),
+            timestamp
+        ));
+        return new AccountMutationOutcome.Rejected(request.operationId(), OperationStatus.CANCELLED, ReplayStatus.ORIGINAL);
+    }
+
+    private AccountMutationOutcome executeAwardTransaction(Connection connection, OperationSource source, AwardRequest request,
+                                                          AwardCalculation calculation, long maximumBalance) throws SQLException {
+        Instant timestamp = databaseTimestamp(connection);
+        OperationDraft draft = awardDraft(source, request, timestamp);
+        OperationReservation reservation = this.persistence.operations().reserve(connection, draft);
+        if (reservation instanceof OperationReservation.Existing existing) {
+            return awardReplayOrConflict(source, request, existing.operation(), ReplayStatus.REPLAYED);
+        }
+
+        if (calculation.finalAmount() == 0L) {
+            this.persistence.operations().complete(connection, new OperationCompletion(
+                request.operationId(),
+                OperationStatus.NO_POINTS_AWARDED,
+                OperationResultCodec.awardCalculationPayload(calculation),
+                timestamp
+            ));
+            return new AccountMutationOutcome.AwardNoMovement(request.operationId(), OperationStatus.NO_POINTS_AWARDED, calculation, ReplayStatus.ORIGINAL);
+        }
+
+        if (exceedsLong(calculation) || calculation.finalAmount() > maximumBalance) {
+            return completeAwardLimitExceeded(connection, request.operationId(), calculation, timestamp);
+        }
+
+        this.persistence.accounts().createOrLoad(connection, request.playerId(), timestamp);
+        StoredAccount account = this.persistence.accounts().lock(connection, request.playerId());
+        long balanceAfter;
+        try {
+            balanceAfter = Math.addExact(account.balance(), calculation.finalAmount());
+        } catch (ArithmeticException exception) {
+            return completeAwardLimitExceeded(connection, request.operationId(), calculation, timestamp);
+        }
+        if (balanceAfter > maximumBalance) {
+            return completeAwardLimitExceeded(connection, request.operationId(), calculation, timestamp);
+        }
+
+        BalanceChange change = BalanceChange.single(
+            request.playerId(),
+            Math.subtractExact(balanceAfter, account.balance()),
+            account.balance(),
+            balanceAfter,
+            Math.addExact(account.revision(), 1L)
+        );
+        this.persistence.accounts().updateBalance(connection, request.playerId(), change.balanceAfter(), change.revision(), timestamp);
+        this.persistence.ledger().append(connection, List.of(new LedgerEntryDraft(
+            request.operationId(),
+            request.playerId(),
+            Optional.empty(),
+            change.delta(),
+            change.balanceBefore(),
+            change.balanceAfter(),
+            change.revision(),
+            timestamp
+        )));
+        this.persistence.operations().complete(connection, new OperationCompletion(
+            request.operationId(),
+            OperationStatus.SUCCESS,
+            OperationResultCodec.awardSuccessPayload(change, calculation),
+            timestamp
+        ));
+
+        OperationReceipt receipt = new OperationReceipt(
+            request.operationId(),
+            OperationType.AWARD,
+            request.reason(),
+            request.actor(),
+            source,
+            request.metadata(),
+            List.of(change),
+            timestamp
+        );
+        return new AccountMutationOutcome.AwardSuccess(receipt, calculation, ReplayStatus.ORIGINAL);
+    }
+
+    private OperationDraft awardDraft(OperationSource source, AwardRequest request, Instant timestamp) {
+        return new OperationDraft(
+            request.operationId(),
+            OperationFingerprint.CURRENT_VERSION,
+            OperationFingerprint.current(
+                OperationType.AWARD,
+                request.playerId(),
+                Optional.empty(),
+                request.gameId(),
+                request.baseAmount(),
+                request.reason(),
+                request.actor(),
+                source.pluginName()
+            ),
+            OperationType.AWARD,
+            request.playerId(),
+            Optional.empty(),
+            request.gameId(),
+            request.baseAmount(),
+            request.actor(),
+            source,
+            request.reason(),
+            request.metadata(),
+            timestamp
+        );
+    }
+
     private AccountMutationOutcome executeTransferTransaction(Connection connection, OperationSource source, TransferRequest request, long maximumBalance,
                                                              List<UUID> orderedIds) throws SQLException {
         Instant timestamp = databaseTimestamp(connection);
@@ -256,6 +416,7 @@ public final class AccountEconomy {
                 OperationType.TRANSFER,
                 request.senderId(),
                 Optional.of(request.receiverId()),
+                Optional.empty(),
                 request.amount(),
                 request.reason(),
                 request.actor(),
@@ -264,6 +425,7 @@ public final class AccountEconomy {
             OperationType.TRANSFER,
             request.senderId(),
             Optional.of(request.receiverId()),
+            Optional.empty(),
             request.amount(),
             request.actor(),
             source,
@@ -390,8 +552,54 @@ public final class AccountEconomy {
         return new AccountMutationOutcome.Rejected(rejected.operationId(), rejected.status(), rejected.replayStatus());
     }
 
+    private AccountMutationOutcome awardReplayOrConflict(OperationSource source, AwardRequest request, StoredOperation operation,
+                                                         ReplayStatus replayStatus) {
+        boolean matches = OperationFingerprint.matches(
+            operation.requestFingerprint(),
+            operation.fingerprintVersion(),
+            OperationType.AWARD,
+            request.playerId(),
+            Optional.empty(),
+            request.gameId(),
+            request.baseAmount(),
+            request.reason(),
+            request.actor(),
+            source.pluginName()
+        );
+        if (!matches) {
+            return new AccountMutationOutcome.Conflict(operation.operationId());
+        }
+        if (operation.status() == OperationStatus.PENDING) {
+            throw new PersistenceDataException("Cannot replay pending award operation " + operation.operationId());
+        }
+        if (operation.status() == OperationStatus.SUCCESS) {
+            DecodedOperationResult decoded = OperationResultCodec.decode(operation, replayStatus);
+            DecodedOperationResult.Success success = (DecodedOperationResult.Success) decoded;
+            return new AccountMutationOutcome.AwardSuccess(
+                success.receipt(),
+                OperationResultCodec.awardCalculation(operation),
+                success.replayStatus()
+            );
+        }
+        if (operation.status() == OperationStatus.NO_POINTS_AWARDED || operation.status() == OperationStatus.BALANCE_LIMIT_EXCEEDED) {
+            return new AccountMutationOutcome.AwardNoMovement(
+                operation.operationId(),
+                operation.status(),
+                OperationResultCodec.awardCalculation(operation),
+                replayStatus
+            );
+        }
+        if (operation.status() == OperationStatus.CANCELLED) {
+            return new AccountMutationOutcome.Rejected(operation.operationId(), OperationStatus.CANCELLED, replayStatus);
+        }
+        throw new PersistenceDataException("Unexpected stored award outcome " + operation.status());
+    }
+
     private CompletableFuture<AccountMutationOutcome> publishOriginalSuccess(AccountMutationOutcome outcome) {
         if (outcome instanceof AccountMutationOutcome.Success success && success.replayStatus() == ReplayStatus.ORIGINAL) {
+            return this.postCommitPublisher.publish(success.receipt()).thenApply(ignored -> outcome);
+        }
+        if (outcome instanceof AccountMutationOutcome.AwardSuccess success && success.replayStatus() == ReplayStatus.ORIGINAL) {
             return this.postCommitPublisher.publish(success.receipt()).thenApply(ignored -> outcome);
         }
         return CompletableFuture.completedFuture(outcome);
@@ -406,6 +614,22 @@ public final class AccountEconomy {
             timestamp
         ));
         return new AccountMutationOutcome.Rejected(operationId, OperationStatus.BALANCE_LIMIT_EXCEEDED, ReplayStatus.ORIGINAL);
+    }
+
+    private AccountMutationOutcome completeAwardLimitExceeded(Connection connection, OperationId operationId,
+                                                             AwardCalculation calculation, Instant timestamp) throws SQLException {
+        this.persistence.operations().complete(connection, new OperationCompletion(
+            operationId,
+            OperationStatus.BALANCE_LIMIT_EXCEEDED,
+            OperationResultCodec.awardCalculationPayload(calculation),
+            timestamp
+        ));
+        return new AccountMutationOutcome.AwardNoMovement(
+            operationId,
+            OperationStatus.BALANCE_LIMIT_EXCEEDED,
+            calculation,
+            ReplayStatus.ORIGINAL
+        );
     }
 
     private void updateAccount(Connection connection, BalanceChange change, Instant timestamp) throws SQLException {
@@ -449,6 +673,10 @@ public final class AccountEconomy {
         }
     }
 
+    private static boolean exceedsLong(AwardCalculation calculation) {
+        return calculation.calculatedAmount().setScale(0, RoundingMode.FLOOR).compareTo(BigDecimal.valueOf(Long.MAX_VALUE)) > 0;
+    }
+
     private static CreditResult toCreditResult(OperationId operationId, AccountMutationOutcome outcome) {
         if (outcome instanceof AccountMutationOutcome.Conflict) {
             return new CreditResult.IdempotencyConflict(operationId);
@@ -462,6 +690,35 @@ public final class AccountEconomy {
             return new CreditResult.BalanceLimitExceeded(operationId, rejected.replayStatus());
         }
         throw unexpectedOutcome(OperationType.CREDIT, rejected.status());
+    }
+
+    private static AwardResult toAwardResult(OperationId operationId, AccountMutationOutcome outcome) {
+        if (outcome instanceof AccountMutationOutcome.Conflict) {
+            return new AwardResult.IdempotencyConflict(operationId);
+        }
+        if (outcome instanceof AccountMutationOutcome.AwardSuccess success) {
+            requireType(success.receipt(), OperationType.AWARD);
+            return new AwardResult.Success(success.receipt(), success.calculation(), success.replayStatus());
+        }
+        if (outcome instanceof AccountMutationOutcome.AwardNoMovement noMovement) {
+            if (noMovement.status() == OperationStatus.NO_POINTS_AWARDED) {
+                return new AwardResult.NoPointsAwarded(operationId, noMovement.calculation(), noMovement.replayStatus());
+            }
+            if (noMovement.status() == OperationStatus.BALANCE_LIMIT_EXCEEDED) {
+                return new AwardResult.BalanceLimitExceeded(operationId, noMovement.calculation(), noMovement.replayStatus());
+            }
+            throw unexpectedOutcome(OperationType.AWARD, noMovement.status());
+        }
+        AccountMutationOutcome.Rejected rejected = (AccountMutationOutcome.Rejected) outcome;
+        if (rejected.status() == OperationStatus.CANCELLED) {
+            return new AwardResult.Cancelled(operationId, rejected.replayStatus());
+        }
+        throw unexpectedOutcome(OperationType.AWARD, rejected.status());
+    }
+
+    private AwardResult toAwardResult(OperationSource source, AwardRequest request, StoredOperation operation, ReplayStatus replayStatus) {
+        AccountMutationOutcome outcome = awardReplayOrConflict(source, request, operation, replayStatus);
+        return toAwardResult(request.operationId(), outcome);
     }
 
     private static DebitResult toDebitResult(OperationId operationId, AccountMutationOutcome outcome) {
@@ -534,11 +791,32 @@ public final class AccountEconomy {
         return new PersistenceDataException("Unexpected stored outcome " + status + " for " + type);
     }
 
-    private sealed interface AccountMutationOutcome permits AccountMutationOutcome.Success, AccountMutationOutcome.Rejected,
-        AccountMutationOutcome.Conflict {
+    private sealed interface AccountMutationOutcome permits AccountMutationOutcome.Success, AccountMutationOutcome.AwardSuccess,
+        AccountMutationOutcome.AwardNoMovement, AccountMutationOutcome.Rejected, AccountMutationOutcome.Conflict {
         record Success(OperationReceipt receipt, ReplayStatus replayStatus) implements AccountMutationOutcome {
             public Success {
                 if (receipt == null) throw new NullPointerException("receipt cannot be null");
+                if (replayStatus == null) throw new NullPointerException("replayStatus cannot be null");
+            }
+        }
+
+        record AwardSuccess(OperationReceipt receipt, AwardCalculation calculation, ReplayStatus replayStatus) implements AccountMutationOutcome {
+            public AwardSuccess {
+                if (receipt == null) throw new NullPointerException("receipt cannot be null");
+                if (receipt.type() != OperationType.AWARD) throw new IllegalArgumentException("receipt must be AWARD");
+                if (calculation == null) throw new NullPointerException("calculation cannot be null");
+                if (replayStatus == null) throw new NullPointerException("replayStatus cannot be null");
+            }
+        }
+
+        record AwardNoMovement(OperationId operationId, OperationStatus status, AwardCalculation calculation,
+                               ReplayStatus replayStatus) implements AccountMutationOutcome {
+            public AwardNoMovement {
+                if (operationId == null) throw new NullPointerException("operationId cannot be null");
+                if (status != OperationStatus.NO_POINTS_AWARDED && status != OperationStatus.BALANCE_LIMIT_EXCEEDED) {
+                    throw new IllegalArgumentException("status must be an award no-movement outcome");
+                }
+                if (calculation == null) throw new NullPointerException("calculation cannot be null");
                 if (replayStatus == null) throw new NullPointerException("replayStatus cannot be null");
             }
         }

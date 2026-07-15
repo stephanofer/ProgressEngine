@@ -7,6 +7,7 @@ import com.stephanofer.progressengine.api.operation.OperationId;
 import com.stephanofer.progressengine.api.operation.OperationReason;
 import com.stephanofer.progressengine.api.operation.OperationType;
 import com.stephanofer.progressengine.api.operation.ReplayStatus;
+import com.stephanofer.progressengine.api.result.AwardCalculation;
 import com.stephanofer.progressengine.api.source.OperationActor;
 import com.stephanofer.progressengine.api.source.OperationSource;
 import com.stephanofer.progressengine.api.transaction.BalanceChange;
@@ -14,7 +15,9 @@ import com.stephanofer.progressengine.persistence.OperationResultPayload;
 import com.stephanofer.progressengine.persistence.OperationStatus;
 import com.stephanofer.progressengine.persistence.PersistenceDataException;
 import com.stephanofer.progressengine.persistence.StoredOperation;
+import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -61,6 +64,35 @@ final class OperationResultCodecTest {
         assertEquals(ReplayStatus.REPLAYED, decoded.replayStatus());
         assertEquals(OperationType.TRANSFER, decoded.receipt().type());
         assertEquals(java.util.List.of(sender, receiver), decoded.receipt().changes());
+    }
+
+    @Test
+    void awardPayloadReconstructsReceiptAndCalculation() {
+        BalanceChange change = BalanceChange.single(this.playerId, 30L, 10L, 40L, 2L);
+        AwardCalculation calculation = new AwardCalculation(
+            10L,
+            12L,
+            new BigDecimal("2.5"),
+            new BigDecimal("30.0"),
+            30L,
+            List.of("personal_points_x2"),
+            true,
+            true
+        );
+        StoredOperation operation = operation(OperationType.AWARD, OperationStatus.SUCCESS, Optional.empty(), 10L,
+            OperationResultCodec.awardSuccessPayload(change, calculation));
+
+        DecodedOperationResult.Success decoded = (DecodedOperationResult.Success) OperationResultCodec.decode(
+            operation,
+            ReplayStatus.REPLAYED
+        );
+
+        assertEquals(OperationType.AWARD, decoded.receipt().type());
+        assertEquals(30L, decoded.receipt().changes().getFirst().delta());
+        AwardCalculation decodedCalculation = OperationResultCodec.awardCalculation(operation);
+        assertEquals(0, calculation.calculatedAmount().compareTo(decodedCalculation.calculatedAmount()));
+        assertEquals(calculation.finalAmount(), decodedCalculation.finalAmount());
+        assertEquals(calculation.appliedBoosterIds(), decodedCalculation.appliedBoosterIds());
     }
 
     @Test
@@ -128,6 +160,7 @@ final class OperationResultCodecTest {
             status,
             this.playerId,
             relatedPlayerId,
+            Optional.empty(),
             amount,
             OperationActor.plugin(),
             new OperationSource("TestPlugin", "server-a"),
