@@ -1,6 +1,8 @@
 package com.stephanofer.progressengine;
 
 import com.stephanofer.networkplayersettings.settings.api.PlayerSettingsService;
+import com.stephanofer.networkplayersettings.assets.api.CountryFlagService;
+import com.stephanofer.networkplayersettings.settings.api.PlayerStyleService;
 import com.stephanofer.progressengine.account.AccountEconomy;
 import com.stephanofer.progressengine.account.BalanceStore;
 import com.stephanofer.progressengine.account.BukkitPostCommitEventDispatcher;
@@ -16,12 +18,19 @@ import com.stephanofer.progressengine.config.ConfigurationProblem;
 import com.stephanofer.progressengine.config.ConfigurationReloadResult;
 import com.stephanofer.progressengine.config.ConfigurationSnapshot;
 import com.stephanofer.progressengine.config.ProgressEngineConfig;
+import com.stephanofer.progressengine.feedback.AwardFeedbackCoalescer;
+import com.stephanofer.progressengine.feedback.AwardFeedbackListener;
+import com.stephanofer.progressengine.feedback.BossBarManager;
+import com.stephanofer.progressengine.feedback.FeedbackService;
+import com.stephanofer.progressengine.identity.IdentityInvalidationListener;
+import com.stephanofer.progressengine.identity.PlayerIdentityRenderer;
 import com.stephanofer.progressengine.lifecycle.BukkitPlayerLifecycleListener;
 import com.stephanofer.progressengine.lifecycle.InFlightTracker;
 import com.stephanofer.progressengine.lifecycle.LifecycleResources;
 import com.stephanofer.progressengine.lifecycle.PlayerLifecycleCoordinator;
 import com.stephanofer.progressengine.lifecycle.RuntimeLifecycle;
 import com.stephanofer.progressengine.lifecycle.RuntimeState;
+import com.stephanofer.progressengine.localization.LocalizedMessages;
 import com.stephanofer.progressengine.persistence.ProgressDatabaseFactory;
 import com.stephanofer.progressengine.persistence.ProgressPersistence;
 import com.stephanofer.progressengine.service.ProgressPointsService;
@@ -37,6 +46,7 @@ import org.bukkit.Bukkit;
 import org.bukkit.event.HandlerList;
 import org.bukkit.plugin.RegisteredServiceProvider;
 import org.bukkit.plugin.java.JavaPlugin;
+import net.luckperms.api.LuckPerms;
 
 public final class ProgressEngineRuntime implements AutoCloseable {
     private final JavaPlugin plugin;
@@ -50,6 +60,9 @@ public final class ProgressEngineRuntime implements AutoCloseable {
     private final AtomicReference<AccountEconomy> accountEconomy = new AtomicReference<>();
     private final AtomicReference<PlayerLifecycleCoordinator> playerLifecycle = new AtomicReference<>();
     private final AtomicReference<ProgressPointsService> pointsService = new AtomicReference<>();
+    private final AtomicReference<LocalizedMessages> localizedMessages = new AtomicReference<>();
+    private final AtomicReference<PlayerIdentityRenderer> identityRenderer = new AtomicReference<>();
+    private final AtomicReference<FeedbackService> feedbackService = new AtomicReference<>();
 
     private ProgressEngineRuntime(
         JavaPlugin plugin,
@@ -73,7 +86,7 @@ public final class ProgressEngineRuntime implements AutoCloseable {
         LifecycleResources resources = new LifecycleResources();
         Executor asyncExecutor = command -> plugin.getServer().getScheduler().runTaskAsynchronously(plugin, command);
         ConfigurationManager configurationManager = new ConfigurationManager(
-            new BoostedYamlConfigurationLoader(plugin.getDataFolder().toPath(), () -> plugin.getResource("config.yml"), Clock.systemUTC()),
+            new BoostedYamlConfigurationLoader(plugin.getDataFolder().toPath(), plugin::getResource, Clock.systemUTC()),
             asyncExecutor
         );
         return new ProgressEngineRuntime(plugin, lifecycle, inFlightTracker, resources, configurationManager);
@@ -146,6 +159,30 @@ public final class ProgressEngineRuntime implements AutoCloseable {
         ProgressPointsService value = this.pointsService.get();
         if (value == null) {
             throw new IllegalStateException("ProgressEngine points service is not initialized");
+        }
+        return value;
+    }
+
+    public LocalizedMessages localizedMessages() {
+        LocalizedMessages value = this.localizedMessages.get();
+        if (value == null) {
+            throw new IllegalStateException("ProgressEngine localization is not initialized");
+        }
+        return value;
+    }
+
+    public PlayerIdentityRenderer identityRenderer() {
+        PlayerIdentityRenderer value = this.identityRenderer.get();
+        if (value == null) {
+            throw new IllegalStateException("ProgressEngine identity renderer is not initialized");
+        }
+        return value;
+    }
+
+    public FeedbackService feedbackService() {
+        FeedbackService value = this.feedbackService.get();
+        if (value == null) {
+            throw new IllegalStateException("ProgressEngine feedback service is not initialized");
         }
         return value;
     }
@@ -258,6 +295,34 @@ public final class ProgressEngineRuntime implements AutoCloseable {
             postCommitPublisher
         );
         PlayerSettingsService playerSettings = resolvePlayerSettingsService();
+        PlayerStyleService playerStyles = resolveService(PlayerStyleService.class, "NetworkPlayerSettings PlayerStyleService");
+        CountryFlagService countryFlags = resolveService(CountryFlagService.class, "NetworkPlayerSettings CountryFlagService");
+        LuckPerms luckPerms = resolveService(LuckPerms.class, "LuckPerms service");
+        LocalizedMessages localizedMessages = new LocalizedMessages(this::activeSnapshot);
+        PlayerIdentityRenderer identityRenderer = new PlayerIdentityRenderer(
+            luckPerms,
+            playerStyles,
+            countryFlags,
+            this::activeSnapshot,
+            this.plugin.getLogger()
+        );
+        BossBarManager bossBars = new BossBarManager(this.plugin);
+        FeedbackService feedbackService = new FeedbackService(
+            this.plugin,
+            playerSettings,
+            localizedMessages,
+            bossBars,
+            this::activeSnapshot,
+            this.plugin.getLogger()
+        );
+        AwardFeedbackCoalescer awardFeedbackCoalescer = new AwardFeedbackCoalescer(
+            this.plugin,
+            feedbackService,
+            this::activeSnapshot,
+            this.plugin.getLogger()
+        );
+        AwardFeedbackListener awardFeedbackListener = new AwardFeedbackListener(awardFeedbackCoalescer);
+        IdentityInvalidationListener identityInvalidationListener = new IdentityInvalidationListener(this.plugin, luckPerms, identityRenderer);
         NetworkBoostersIntegration boostersIntegration = resolveNetworkBoosters(snapshot);
         AwardCoordinator awardCoordinator = new AwardCoordinator(
             economy,
@@ -313,8 +378,35 @@ public final class ProgressEngineRuntime implements AutoCloseable {
             store.close();
             throw new IllegalStateException("ProgressEngine points service was already initialized");
         }
+        if (!this.localizedMessages.compareAndSet(null, localizedMessages)) {
+            lifecycleCoordinator.close();
+            store.close();
+            throw new IllegalStateException("ProgressEngine localization was already initialized");
+        }
+        if (!this.identityRenderer.compareAndSet(null, identityRenderer)) {
+            identityRenderer.close();
+            lifecycleCoordinator.close();
+            store.close();
+            throw new IllegalStateException("ProgressEngine identity renderer was already initialized");
+        }
+        if (!this.feedbackService.compareAndSet(null, feedbackService)) {
+            feedbackService.close();
+            identityRenderer.close();
+            lifecycleCoordinator.close();
+            store.close();
+            throw new IllegalStateException("ProgressEngine feedback service was already initialized");
+        }
         this.resources.register("balance-store", store);
         this.resources.register("player-lifecycle", lifecycleCoordinator);
+        this.resources.register("identity-renderer", identityRenderer);
+        this.resources.register("feedback-service", feedbackService);
+        this.resources.register("award-feedback-coalescer", awardFeedbackCoalescer);
+        this.plugin.getServer().getPluginManager().registerEvents(identityInvalidationListener, this.plugin);
+        this.resources.register("identity-invalidation-listener", () -> HandlerList.unregisterAll(identityInvalidationListener));
+        this.plugin.getServer().getPluginManager().registerEvents(feedbackService, this.plugin);
+        this.resources.register("feedback-listener", () -> HandlerList.unregisterAll(feedbackService));
+        this.plugin.getServer().getPluginManager().registerEvents(awardFeedbackListener, this.plugin);
+        this.resources.register("award-feedback-listener", () -> HandlerList.unregisterAll(awardFeedbackListener));
         BukkitPlayerLifecycleListener listener = new BukkitPlayerLifecycleListener(lifecycleCoordinator, playerSettings);
         this.plugin.getServer().getPluginManager().registerEvents(listener, this.plugin);
         this.resources.register("player-lifecycle-listener", () -> HandlerList.unregisterAll(listener));
@@ -326,10 +418,13 @@ public final class ProgressEngineRuntime implements AutoCloseable {
     }
 
     private PlayerSettingsService resolvePlayerSettingsService() {
-        RegisteredServiceProvider<PlayerSettingsService> registration = this.plugin.getServer().getServicesManager()
-            .getRegistration(PlayerSettingsService.class);
+        return resolveService(PlayerSettingsService.class, "NetworkPlayerSettings PlayerSettingsService");
+    }
+
+    private <T> T resolveService(Class<T> type, String displayName) {
+        RegisteredServiceProvider<T> registration = this.plugin.getServer().getServicesManager().getRegistration(type);
         if (registration == null) {
-            throw new IllegalStateException("NetworkPlayerSettings PlayerSettingsService is not registered");
+            throw new IllegalStateException(displayName + " is not registered");
         }
         return registration.getProvider();
     }
@@ -370,6 +465,11 @@ public final class ProgressEngineRuntime implements AutoCloseable {
     private ProgressEngineConfig activeConfig() {
         return this.configurationManager.activeSnapshot()
             .map(ConfigurationSnapshot::config)
+            .orElseThrow(() -> new IllegalStateException("ProgressEngine configuration is not initialized"));
+    }
+
+    private ConfigurationSnapshot activeSnapshot() {
+        return this.configurationManager.activeSnapshot()
             .orElseThrow(() -> new IllegalStateException("ProgressEngine configuration is not initialized"));
     }
 

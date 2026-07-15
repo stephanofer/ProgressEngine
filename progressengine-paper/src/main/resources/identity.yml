@@ -1,0 +1,12 @@
+# ProgressEngine player identity rendering.
+config-version: 1
+
+player-identity:
+  parts:
+    - prefix
+    - nick
+    - country_flag
+  separator: " "
+  offline-cache:
+    maximum-size: 5000
+    expire-after-write-seconds: 300

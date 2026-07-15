@@ -1,0 +1,59 @@
+# Mensajes y acciones de feedback en español para ProgressEngine.
+config-version: 1
+
+number-format:
+  grouping-separator: "."
+  decimal-separator: ","
+  compact-decimals: 1
+  compact-space: false
+  compact-suffixes:
+    thousand: "K"
+    million: "M"
+    billion: "B"
+    trillion: "T"
+    quadrillion: "Qa"
+    quintillion: "Qi"
+
+messages:
+  points-loading: "<yellow>Tus points todavía están cargando.</yellow>"
+  command-no-permission: "<red>No tenés permiso para usar esto.</red>"
+  command-player-only: "<red>Solo jugadores pueden usar este comando.</red>"
+  command-console-only: "<red>Solo la consola puede usar este comando.</red>"
+  invalid-amount: "<red>Cantidad inválida: <input>.</red>"
+  unknown-target: "<red>Jugador desconocido: <target>.</red>"
+  balance-self: "<green>Balance: <balance> points.</green>"
+  balance-other: "<green>Balance de <target>: <balance> points.</green>"
+  pay-confirm-required: "<yellow>Confirmá el envío de <amount> points a <target> con <gold>/points pay confirm <token></gold>.</yellow>"
+  pay-success-sender: "<green>Enviaste <amount> points a <target>. Balance: <balance>.</green>"
+  pay-success-receiver: "<green>Recibiste <amount> points de <sender>. Balance: <balance>.</green>"
+  pay-insufficient-funds: "<red>Necesitás <amount> points, pero tu balance es <balance>.</red>"
+  pay-cooldown: "<red>Esperá <seconds>s antes de enviar otro pago.</red>"
+  history-empty: "<yellow>No se encontraron movimientos de points.</yellow>"
+  history-header: "<gold>Historial de points <gray>(página <page>)</gray></gold>"
+  history-entry: "<gray><date> <white><amount></white> | <reason> | balance <balance></gray>"
+  admin-add-success: "<green>Agregaste <amount> points a <target>. Balance: <balance>.</green>"
+  admin-remove-success: "<green>Quitaste <amount> points a <target>. Balance: <balance>.</green>"
+  admin-set-success: "<green>Balance de <target> establecido en <balance>.</green>"
+  admin-reset-success: "<green>Balance de <target> reiniciado. Balance: <balance>.</green>"
+  admin-reload-success: "<green>ProgressEngine recargado. Revisión: <revision>.</green>"
+  admin-reload-failure: "<red>No se pudo recargar ProgressEngine: <problems>.</red>"
+  admin-status-header: "<gold>Estado de ProgressEngine: <state></gold>"
+  infrastructure-unavailable: "<red>ProgressEngine no está disponible temporalmente.</red>"
+
+feedback:
+  award-received:
+    - type: action_bar
+      message: "<green>+<amount> points <gray>| <white><balance> total</white></gray></green>"
+    - type: sound
+      sound: "minecraft:entity.experience_orb.pickup"
+      source: "master"
+      volume: 0.8
+      pitch: 1.2
+  transfer-received:
+    - type: chat
+      message: "<green>Recibiste <amount> points de <sender>. Balance: <balance>.</green>"
+    - type: sound
+      sound: "minecraft:block.note_block.pling"
+      source: "master"
+      volume: 0.7
+      pitch: 1.1

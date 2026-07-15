@@ -32,9 +32,43 @@ final class BoostedYamlConfigurationLoaderTest {
         assertEquals(Instant.parse("2026-07-14T00:00:00Z"), loaded.snapshot().loadedAt());
         assertEquals(Long.MAX_VALUE, loaded.snapshot().config().economy().maximumBalance());
         assertEquals("lobby-1", loaded.snapshot().config().serverId());
+        assertEquals("en", loaded.snapshot().localization().fallbackLanguage());
+        assertTrue(loaded.snapshot().messages().require("en").messages().containsKey("points-loading"));
         assertTrue(Files.exists(this.directory.resolve("config.yml")));
+        assertTrue(Files.exists(this.directory.resolve("identity.yml")));
+        assertTrue(Files.exists(this.directory.resolve("messages/es.yml")));
+        assertTrue(Files.exists(this.directory.resolve("messages/en.yml")));
         assertFalse(loaded.snapshot().config().database().toString().contains("password=\""));
         assertTrue(loaded.snapshot().config().database().toString().contains("password=<hidden>"));
+    }
+
+    @Test
+    void invalidMessageCatalogKeepsCandidateUnpublished() throws Exception {
+        Files.createDirectories(this.directory.resolve("messages"));
+        Files.writeString(this.directory.resolve("messages/en.yml"), defaultResource("messages/en.yml").replace(
+            "points-loading: \"<yellow>Your points are still loading.</yellow>\"",
+            "points-loading: \"<yellow>Your points are <unknown></yellow>.\""
+        ));
+
+        ConfigurationLoadException exception = assertThrows(ConfigurationLoadException.class, () -> loader().load(1L));
+
+        assertTrue(exception.problems().stream().anyMatch(problem -> problem.path().contains("messages/en.yml:messages.points-loading")));
+    }
+
+    @Test
+    void missingNonFallbackKeyUsesFallbackCatalog() throws Exception {
+        Files.createDirectories(this.directory.resolve("messages"));
+        Files.writeString(this.directory.resolve("messages/es.yml"), defaultResource("messages/es.yml").replace(
+            "  points-loading: \"<yellow>Tus points todavía están cargando.</yellow>\"\n",
+            ""
+        ));
+
+        LoadedConfiguration loaded = loader().load(1L);
+
+        assertEquals(
+            loaded.snapshot().messages().require("en").messages().get("points-loading"),
+            loaded.snapshot().messages().require("es").messages().get("points-loading")
+        );
     }
 
     @Test
@@ -83,12 +117,16 @@ final class BoostedYamlConfigurationLoaderTest {
         return new BoostedYamlConfigurationLoader(this.directory, BoostedYamlConfigurationLoaderTest::defaultStream, CLOCK);
     }
 
-    private static InputStream defaultStream() {
-        return BoostedYamlConfigurationLoaderTest.class.getResourceAsStream("/config.yml");
+    private static InputStream defaultStream(String name) {
+        return BoostedYamlConfigurationLoaderTest.class.getResourceAsStream("/" + name);
     }
 
     private static String defaultConfig() throws Exception {
-        try (InputStream stream = defaultStream()) {
+        return defaultResource("config.yml");
+    }
+
+    private static String defaultResource(String name) throws Exception {
+        try (InputStream stream = defaultStream(name)) {
             return new String(stream.readAllBytes(), StandardCharsets.UTF_8);
         }
     }

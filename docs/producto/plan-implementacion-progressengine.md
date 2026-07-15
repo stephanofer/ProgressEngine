@@ -370,13 +370,13 @@ Se aplican estas reglas durante todo el plan:
 
 **El bloque se considera terminado cuando:**
 
-- [ ] Todo nombre visible pasa por el renderer central.
-- [ ] Todo feedback de jugador usa el idioma efectivo actual.
-- [ ] Input dinámico no se interpreta como MiniMessage administrado.
-- [ ] Boss bars y coalescing solo afectan presentación.
-- [ ] Un reload inválido conserva íntegramente la configuración anterior.
+- [x] Todo nombre visible pasa por el renderer central.
+- [x] Todo feedback de jugador usa el idioma efectivo actual.
+- [x] Input dinámico no se interpreta como MiniMessage administrado.
+- [x] Boss bars y coalescing solo afectan presentación.
+- [x] Un reload inválido conserva íntegramente la configuración anterior.
 
-**Constancia de cierre:** [ ] Terminado | Fecha: __________ | 
+**Constancia de cierre:** [x] Terminado | Fecha: 7/15/26 | 
 
 ## Bloque 10: Redis y convergencia entre servidores
 
