@@ -71,6 +71,41 @@ final class PersistenceValueTest {
     }
 
     @Test
+    void operationDraftRequiresTransferCounterpartyOnlyForTransfers() {
+        byte[] fingerprint = new byte[32];
+        fingerprint[0] = 1;
+        UUID playerId = UUID.randomUUID();
+        UUID receiverId = UUID.randomUUID();
+
+        OperationDraft transfer = new OperationDraft(
+            OperationId.generate(),
+            1,
+            fingerprint,
+            OperationType.TRANSFER,
+            playerId,
+            Optional.of(receiverId),
+            100L,
+            OperationActor.plugin(),
+            new OperationSource("TestPlugin", "server-1"),
+            OperationReason.of("test:transfer"),
+            OperationMetadata.empty(),
+            Instant.EPOCH
+        );
+
+        assertEquals(Optional.of(receiverId), transfer.relatedPlayerId());
+        assertThrows(IllegalArgumentException.class, () -> new OperationDraft(
+            OperationId.generate(), 1, fingerprint, OperationType.TRANSFER, playerId, Optional.empty(), 100L,
+            OperationActor.plugin(), new OperationSource("TestPlugin", "server-1"), OperationReason.of("test:transfer"),
+            OperationMetadata.empty(), Instant.EPOCH
+        ));
+        assertThrows(IllegalArgumentException.class, () -> new OperationDraft(
+            OperationId.generate(), 1, fingerprint, OperationType.CREDIT, playerId, Optional.of(receiverId), 100L,
+            OperationActor.plugin(), new OperationSource("TestPlugin", "server-1"), OperationReason.of("test:credit"),
+            OperationMetadata.empty(), Instant.EPOCH
+        ));
+    }
+
+    @Test
     void operationResultPayloadRequiresVersionAndJsonTogether() {
         assertFalse(OperationResultPayload.empty().version().isPresent());
         assertTrue(OperationResultPayload.of(1, "{}").json().isPresent());
@@ -134,6 +169,32 @@ final class PersistenceValueTest {
     }
 
     @Test
+    void storedOperationRequiresTransferCounterpartyOnlyForTransfers() {
+        byte[] fingerprint = new byte[32];
+        fingerprint[0] = 1;
+        UUID playerId = UUID.randomUUID();
+        UUID receiverId = UUID.randomUUID();
+
+        StoredOperation transfer = storedOperation(OperationType.TRANSFER, playerId, Optional.of(receiverId), 100L, fingerprint);
+
+        assertEquals(Optional.of(receiverId), transfer.relatedPlayerId());
+        assertThrows(PersistenceDataException.class, () -> storedOperation(
+            OperationType.TRANSFER,
+            playerId,
+            Optional.empty(),
+            100L,
+            fingerprint
+        ));
+        assertThrows(PersistenceDataException.class, () -> storedOperation(
+            OperationType.CREDIT,
+            playerId,
+            Optional.of(receiverId),
+            100L,
+            fingerprint
+        ));
+    }
+
+    @Test
     void binaryUuidUsesCanonicalBigEndianLayout() {
         UUID uuid = new UUID(0x0102030405060708L, 0x1112131415161718L);
 
@@ -141,5 +202,26 @@ final class PersistenceValueTest {
             1, 2, 3, 4, 5, 6, 7, 8,
             17, 18, 19, 20, 21, 22, 23, 24
         }, BinaryUuid.encode(uuid));
+    }
+
+    private static StoredOperation storedOperation(OperationType type, UUID playerId, Optional<UUID> relatedPlayerId,
+                                                   long amount, byte[] fingerprint) {
+        return new StoredOperation(
+            OperationId.generate(),
+            1,
+            fingerprint,
+            type,
+            OperationStatus.SUCCESS,
+            playerId,
+            relatedPlayerId,
+            amount,
+            OperationActor.plugin(),
+            new OperationSource("TestPlugin", "server-1"),
+            OperationReason.of("test:operation"),
+            "{}",
+            OperationResultPayload.of(1, "{}"),
+            Instant.EPOCH,
+            Optional.of(Instant.EPOCH)
+        );
     }
 }

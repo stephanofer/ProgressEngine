@@ -51,6 +51,19 @@ final class ReceiptValidationTest {
         assertEquals(2, receipt.changes().size());
         assertThrows(IllegalArgumentException.class, () -> receipt(OperationType.TRANSFER, List.of(sender)));
         assertThrows(IllegalArgumentException.class, () -> receipt(OperationType.TRANSFER, List.of(sender, BalanceChange.related(OTHER, PLAYER, 9L, 0L, 9L, 1L))));
+        assertThrows(IllegalArgumentException.class, () -> receipt(OperationType.TRANSFER, List.of(receiver, sender)));
+        assertThrows(IllegalArgumentException.class, () -> receipt(OperationType.TRANSFER, List.of(
+            BalanceChange.single(PLAYER, -10L, 20L, 10L, 2L),
+            receiver
+        )));
+        assertThrows(IllegalArgumentException.class, () -> receipt(OperationType.TRANSFER, List.of(
+            sender,
+            BalanceChange.single(OTHER, 10L, 0L, 10L, 1L)
+        )));
+        assertThrows(IllegalArgumentException.class, () -> receipt(OperationType.TRANSFER, List.of(
+            BalanceChange.related(PLAYER, OTHER, 0L, 20L, 20L, 2L),
+            BalanceChange.related(OTHER, PLAYER, 0L, 10L, 10L, 1L)
+        )));
     }
 
     @Test

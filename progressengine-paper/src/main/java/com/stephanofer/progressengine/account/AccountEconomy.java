@@ -10,10 +10,12 @@ import com.stephanofer.progressengine.api.request.CreditRequest;
 import com.stephanofer.progressengine.api.request.DebitRequest;
 import com.stephanofer.progressengine.api.request.ResetBalanceRequest;
 import com.stephanofer.progressengine.api.request.SetBalanceRequest;
+import com.stephanofer.progressengine.api.request.TransferRequest;
 import com.stephanofer.progressengine.api.result.CreditResult;
 import com.stephanofer.progressengine.api.result.DebitResult;
 import com.stephanofer.progressengine.api.result.ResetBalanceResult;
 import com.stephanofer.progressengine.api.result.SetBalanceResult;
+import com.stephanofer.progressengine.api.result.TransferResult;
 import com.stephanofer.progressengine.api.source.OperationSource;
 import com.stephanofer.progressengine.api.transaction.BalanceChange;
 import com.stephanofer.progressengine.api.transaction.OperationReceipt;
@@ -27,6 +29,7 @@ import com.stephanofer.progressengine.persistence.ProgressPersistence;
 import com.stephanofer.progressengine.persistence.StoredAccount;
 import com.stephanofer.progressengine.persistence.StoredOperation;
 import com.stephanofer.progressengine.transaction.AccountMutationSequencer;
+import com.stephanofer.progressengine.transaction.CanonicalAccountOrder;
 import com.stephanofer.progressengine.transaction.DecodedOperationResult;
 import com.stephanofer.progressengine.transaction.OperationFingerprint;
 import com.stephanofer.progressengine.transaction.OperationResultCodec;
@@ -51,59 +54,107 @@ public final class AccountEconomy {
     private final OperationSource source;
     private final LongSupplier maximumBalance;
     private final AccountMutationSequencer sequencer;
+    private final AccountPostCommitPublisher postCommitPublisher;
 
     public AccountEconomy(ProgressPersistence persistence, OperationSource source, LongSupplier maximumBalance) {
-        this(persistence, source, maximumBalance, new AccountMutationSequencer());
+        this(persistence, source, maximumBalance, new AccountMutationSequencer(), AccountPostCommitPublisher.noop());
     }
 
     public AccountEconomy(ProgressPersistence persistence, OperationSource source, LongSupplier maximumBalance,
-                          AccountMutationSequencer sequencer) {
+                           AccountMutationSequencer sequencer) {
+        this(persistence, source, maximumBalance, sequencer, AccountPostCommitPublisher.noop());
+    }
+
+    public AccountEconomy(ProgressPersistence persistence, OperationSource source, LongSupplier maximumBalance,
+                          AccountMutationSequencer sequencer, AccountPostCommitPublisher postCommitPublisher) {
         this.persistence = Objects.requireNonNull(persistence, "persistence");
         this.source = Objects.requireNonNull(source, "source");
         this.maximumBalance = Objects.requireNonNull(maximumBalance, "maximumBalance");
         this.sequencer = Objects.requireNonNull(sequencer, "sequencer");
+        this.postCommitPublisher = AccountPostCommitPublisher.require(postCommitPublisher);
     }
 
     public CompletableFuture<CreditResult> credit(CreditRequest request) {
+        return credit(this.source, request);
+    }
+
+    public CompletableFuture<CreditResult> credit(OperationSource source, CreditRequest request) {
+        Objects.requireNonNull(source, "source");
         Objects.requireNonNull(request, "request");
         AccountMutationIntent intent = AccountMutationIntent.credit(request);
-        return execute(intent).thenApply(outcome -> toCreditResult(request.operationId(), outcome));
+        return execute(source, intent).thenApply(outcome -> toCreditResult(request.operationId(), outcome));
     }
 
     public CompletableFuture<DebitResult> debit(DebitRequest request) {
+        return debit(this.source, request);
+    }
+
+    public CompletableFuture<DebitResult> debit(OperationSource source, DebitRequest request) {
+        Objects.requireNonNull(source, "source");
         Objects.requireNonNull(request, "request");
         AccountMutationIntent intent = AccountMutationIntent.debit(request);
-        return execute(intent).thenApply(outcome -> toDebitResult(request.operationId(), outcome));
+        return execute(source, intent).thenApply(outcome -> toDebitResult(request.operationId(), outcome));
     }
 
     public CompletableFuture<SetBalanceResult> setBalance(SetBalanceRequest request) {
+        return setBalance(this.source, request);
+    }
+
+    public CompletableFuture<SetBalanceResult> setBalance(OperationSource source, SetBalanceRequest request) {
+        Objects.requireNonNull(source, "source");
         Objects.requireNonNull(request, "request");
         AccountMutationIntent intent = AccountMutationIntent.set(request);
-        return execute(intent).thenApply(outcome -> toSetBalanceResult(request.operationId(), outcome));
+        return execute(source, intent).thenApply(outcome -> toSetBalanceResult(request.operationId(), outcome));
     }
 
     public CompletableFuture<ResetBalanceResult> resetBalance(ResetBalanceRequest request) {
+        return resetBalance(this.source, request);
+    }
+
+    public CompletableFuture<ResetBalanceResult> resetBalance(OperationSource source, ResetBalanceRequest request) {
+        Objects.requireNonNull(source, "source");
         Objects.requireNonNull(request, "request");
         AccountMutationIntent intent = AccountMutationIntent.reset(request);
-        return execute(intent).thenApply(outcome -> toResetBalanceResult(request.operationId(), outcome));
+        return execute(source, intent).thenApply(outcome -> toResetBalanceResult(request.operationId(), outcome));
+    }
+
+    public CompletableFuture<TransferResult> transfer(TransferRequest request) {
+        return transfer(this.source, request);
+    }
+
+    public CompletableFuture<TransferResult> transfer(OperationSource source, TransferRequest request) {
+        Objects.requireNonNull(source, "source");
+        Objects.requireNonNull(request, "request");
+        if (request.senderId().equals(request.receiverId())) {
+            return CompletableFuture.completedFuture(new TransferResult.SelfTransferRejected(request.operationId()));
+        }
+        long maximum = this.maximumBalance.getAsLong();
+        if (maximum < 1L) {
+            return CompletableFuture.failedFuture(new IllegalStateException("maximumBalance must be positive"));
+        }
+        List<UUID> orderedIds = CanonicalAccountOrder.sort(List.of(request.senderId(), request.receiverId()));
+        return this.sequencer.submit(orderedIds, () -> this.persistence.database().transaction(
+            MUTATION_OPTIONS,
+            connection -> executeTransferTransaction(connection, source, request, maximum, orderedIds)
+        ).thenCompose(this::publishOriginalSuccess)).thenApply(outcome -> toTransferResult(request.operationId(), outcome));
     }
 
     public AccountMutationSequencer sequencer() {
         return this.sequencer;
     }
 
-    private CompletableFuture<AccountMutationOutcome> execute(AccountMutationIntent intent) {
+    private CompletableFuture<AccountMutationOutcome> execute(OperationSource source, AccountMutationIntent intent) {
         long maximum = this.maximumBalance.getAsLong();
         if (maximum < 1L) {
             return CompletableFuture.failedFuture(new IllegalStateException("maximumBalance must be positive"));
         }
         return this.sequencer.submit(List.of(intent.playerId()), () -> this.persistence.database().transaction(
             MUTATION_OPTIONS,
-            connection -> executeTransaction(connection, intent, maximum)
-        ));
+            connection -> executeTransaction(connection, source, intent, maximum)
+        ).thenCompose(this::publishOriginalSuccess));
     }
 
-    private AccountMutationOutcome executeTransaction(Connection connection, AccountMutationIntent intent, long maximumBalance)
+    private AccountMutationOutcome executeTransaction(Connection connection, OperationSource source, AccountMutationIntent intent, long maximumBalance)
         throws SQLException {
         Instant timestamp = databaseTimestamp(connection);
         OperationDraft draft = new OperationDraft(
@@ -116,14 +167,14 @@ public final class AccountEconomy {
                 intent.requestedAmount(),
                 intent.reason(),
                 intent.actor(),
-                this.source.pluginName()
+                source.pluginName()
             ),
             intent.type(),
             intent.playerId(),
             Optional.empty(),
             intent.requestedAmount(),
             intent.actor(),
-            this.source,
+            source,
             intent.reason(),
             intent.metadata(),
             timestamp
@@ -131,7 +182,16 @@ public final class AccountEconomy {
 
         OperationReservation reservation = this.persistence.operations().reserve(connection, draft);
         if (reservation instanceof OperationReservation.Existing existing) {
-            return replayOrConflict(existing.operation(), intent);
+            return replayOrConflict(
+                existing.operation(),
+                intent.type(),
+                intent.playerId(),
+                Optional.empty(),
+                intent.requestedAmount(),
+                intent.reason(),
+                intent.actor(),
+                source
+            );
         }
 
         this.persistence.accounts().createOrLoad(connection, intent.playerId(), timestamp);
@@ -178,7 +238,7 @@ public final class AccountEconomy {
             intent.type(),
             intent.reason(),
             intent.actor(),
-            this.source,
+            source,
             intent.metadata(),
             List.of(change),
             timestamp
@@ -186,20 +246,141 @@ public final class AccountEconomy {
         return new AccountMutationOutcome.Success(receipt, ReplayStatus.ORIGINAL);
     }
 
-    private AccountMutationOutcome replayOrConflict(StoredOperation operation, AccountMutationIntent intent) {
+    private AccountMutationOutcome executeTransferTransaction(Connection connection, OperationSource source, TransferRequest request, long maximumBalance,
+                                                             List<UUID> orderedIds) throws SQLException {
+        Instant timestamp = databaseTimestamp(connection);
+        OperationDraft draft = new OperationDraft(
+            request.operationId(),
+            OperationFingerprint.CURRENT_VERSION,
+            OperationFingerprint.current(
+                OperationType.TRANSFER,
+                request.senderId(),
+                Optional.of(request.receiverId()),
+                request.amount(),
+                request.reason(),
+                request.actor(),
+                source.pluginName()
+            ),
+            OperationType.TRANSFER,
+            request.senderId(),
+            Optional.of(request.receiverId()),
+            request.amount(),
+            request.actor(),
+            source,
+            request.reason(),
+            request.metadata(),
+            timestamp
+        );
+
+        OperationReservation reservation = this.persistence.operations().reserve(connection, draft);
+        if (reservation instanceof OperationReservation.Existing existing) {
+            return replayOrConflict(
+                existing.operation(),
+                OperationType.TRANSFER,
+                request.senderId(),
+                Optional.of(request.receiverId()),
+                request.amount(),
+                request.reason(),
+                request.actor(),
+                source
+            );
+        }
+
+        for (UUID playerId : orderedIds) {
+            this.persistence.accounts().createOrLoad(connection, playerId, timestamp);
+        }
+        StoredAccount first = this.persistence.accounts().lock(connection, orderedIds.get(0));
+        StoredAccount second = this.persistence.accounts().lock(connection, orderedIds.get(1));
+        StoredAccount sender = first.playerId().equals(request.senderId()) ? first : second;
+        StoredAccount receiver = first.playerId().equals(request.receiverId()) ? first : second;
+
+        if (sender.balance() < request.amount()) {
+            this.persistence.operations().complete(connection, new OperationCompletion(
+                request.operationId(),
+                OperationStatus.INSUFFICIENT_FUNDS,
+                OperationResultCodec.rejectionPayload(),
+                timestamp
+            ));
+            return new AccountMutationOutcome.Rejected(request.operationId(), OperationStatus.INSUFFICIENT_FUNDS, ReplayStatus.ORIGINAL);
+        }
+
+        long senderAfter = Math.subtractExact(sender.balance(), request.amount());
+        long receiverAfter;
+        try {
+            receiverAfter = Math.addExact(receiver.balance(), request.amount());
+        } catch (ArithmeticException exception) {
+            return completeTransferLimitExceeded(connection, request.operationId(), timestamp);
+        }
+        if (receiverAfter > maximumBalance) {
+            return completeTransferLimitExceeded(connection, request.operationId(), timestamp);
+        }
+
+        BalanceChange senderChange = BalanceChange.related(
+            request.senderId(),
+            request.receiverId(),
+            Math.subtractExact(senderAfter, sender.balance()),
+            sender.balance(),
+            senderAfter,
+            Math.addExact(sender.revision(), 1L)
+        );
+        BalanceChange receiverChange = BalanceChange.related(
+            request.receiverId(),
+            request.senderId(),
+            Math.subtractExact(receiverAfter, receiver.balance()),
+            receiver.balance(),
+            receiverAfter,
+            Math.addExact(receiver.revision(), 1L)
+        );
+
+        if (orderedIds.get(0).equals(request.senderId())) {
+            updateAccount(connection, senderChange, timestamp);
+            updateAccount(connection, receiverChange, timestamp);
+        } else {
+            updateAccount(connection, receiverChange, timestamp);
+            updateAccount(connection, senderChange, timestamp);
+        }
+        this.persistence.ledger().append(connection, List.of(
+            ledgerEntry(request.operationId(), senderChange, timestamp),
+            ledgerEntry(request.operationId(), receiverChange, timestamp)
+        ));
+        this.persistence.operations().complete(connection, new OperationCompletion(
+            request.operationId(),
+            OperationStatus.SUCCESS,
+            OperationResultCodec.transferSuccessPayload(senderChange, receiverChange),
+            timestamp
+        ));
+
+        OperationReceipt receipt = new OperationReceipt(
+            request.operationId(),
+            OperationType.TRANSFER,
+            request.reason(),
+            request.actor(),
+            source,
+            request.metadata(),
+            List.of(senderChange, receiverChange),
+            timestamp
+        );
+        return new AccountMutationOutcome.Success(receipt, ReplayStatus.ORIGINAL);
+    }
+
+    private AccountMutationOutcome replayOrConflict(StoredOperation operation, OperationType type, UUID playerId,
+                                                    Optional<UUID> relatedPlayerId, long amount,
+                                                    com.stephanofer.progressengine.api.operation.OperationReason reason,
+                                                    com.stephanofer.progressengine.api.source.OperationActor actor,
+                                                    OperationSource source) {
         boolean matches = OperationFingerprint.matches(
             operation.requestFingerprint(),
             operation.fingerprintVersion(),
-            intent.type(),
-            intent.playerId(),
-            Optional.empty(),
-            intent.requestedAmount(),
-            intent.reason(),
-            intent.actor(),
-            this.source.pluginName()
+            type,
+            playerId,
+            relatedPlayerId,
+            amount,
+            reason,
+            actor,
+            source.pluginName()
         );
         if (!matches) {
-            return new AccountMutationOutcome.Conflict(intent.operationId());
+            return new AccountMutationOutcome.Conflict(operation.operationId());
         }
         DecodedOperationResult decoded = OperationResultCodec.decode(operation, ReplayStatus.REPLAYED);
         if (decoded instanceof DecodedOperationResult.Success success) {
@@ -207,6 +388,41 @@ public final class AccountEconomy {
         }
         DecodedOperationResult.Rejected rejected = (DecodedOperationResult.Rejected) decoded;
         return new AccountMutationOutcome.Rejected(rejected.operationId(), rejected.status(), rejected.replayStatus());
+    }
+
+    private CompletableFuture<AccountMutationOutcome> publishOriginalSuccess(AccountMutationOutcome outcome) {
+        if (outcome instanceof AccountMutationOutcome.Success success && success.replayStatus() == ReplayStatus.ORIGINAL) {
+            return this.postCommitPublisher.publish(success.receipt()).thenApply(ignored -> outcome);
+        }
+        return CompletableFuture.completedFuture(outcome);
+    }
+
+    private AccountMutationOutcome completeTransferLimitExceeded(Connection connection, OperationId operationId, Instant timestamp)
+        throws SQLException {
+        this.persistence.operations().complete(connection, new OperationCompletion(
+            operationId,
+            OperationStatus.BALANCE_LIMIT_EXCEEDED,
+            OperationResultCodec.rejectionPayload(),
+            timestamp
+        ));
+        return new AccountMutationOutcome.Rejected(operationId, OperationStatus.BALANCE_LIMIT_EXCEEDED, ReplayStatus.ORIGINAL);
+    }
+
+    private void updateAccount(Connection connection, BalanceChange change, Instant timestamp) throws SQLException {
+        this.persistence.accounts().updateBalance(connection, change.playerId(), change.balanceAfter(), change.revision(), timestamp);
+    }
+
+    private static LedgerEntryDraft ledgerEntry(OperationId operationId, BalanceChange change, Instant timestamp) {
+        return new LedgerEntryDraft(
+            operationId,
+            change.playerId(),
+            change.relatedPlayerId(),
+            change.delta(),
+            change.balanceBefore(),
+            change.balanceAfter(),
+            change.revision(),
+            timestamp
+        );
     }
 
     private static AccountMutationDecision resolve(AccountMutationIntent intent, StoredAccount account, long maximumBalance) {
@@ -288,6 +504,24 @@ public final class AccountEconomy {
         }
         AccountMutationOutcome.Rejected rejected = (AccountMutationOutcome.Rejected) outcome;
         throw unexpectedOutcome(OperationType.RESET_BALANCE, rejected.status());
+    }
+
+    private static TransferResult toTransferResult(OperationId operationId, AccountMutationOutcome outcome) {
+        if (outcome instanceof AccountMutationOutcome.Conflict) {
+            return new TransferResult.IdempotencyConflict(operationId);
+        }
+        if (outcome instanceof AccountMutationOutcome.Success success) {
+            requireType(success.receipt(), OperationType.TRANSFER);
+            return new TransferResult.Success(success.receipt(), success.replayStatus());
+        }
+        AccountMutationOutcome.Rejected rejected = (AccountMutationOutcome.Rejected) outcome;
+        if (rejected.status() == OperationStatus.INSUFFICIENT_FUNDS) {
+            return new TransferResult.InsufficientFunds(operationId, rejected.replayStatus());
+        }
+        if (rejected.status() == OperationStatus.BALANCE_LIMIT_EXCEEDED) {
+            return new TransferResult.BalanceLimitExceeded(operationId, rejected.replayStatus());
+        }
+        throw unexpectedOutcome(OperationType.TRANSFER, rejected.status());
     }
 
     private static void requireType(OperationReceipt receipt, OperationType expected) {

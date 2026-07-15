@@ -46,13 +46,25 @@ public record OperationReceipt(OperationId operationId, OperationType type, Oper
             if (changes.size() != 2) {
                 throw new IllegalArgumentException("transfer receipt must contain exactly two changes");
             }
-            BalanceChange first = changes.get(0);
-            BalanceChange second = changes.get(1);
-            if (first.playerId().equals(second.playerId())) {
+            BalanceChange sender = changes.get(0);
+            BalanceChange receiver = changes.get(1);
+            if (sender.playerId().equals(receiver.playerId())) {
                 throw new IllegalArgumentException("transfer changes must affect different players");
             }
-            if (Math.addExact(first.delta(), second.delta()) != 0L) {
+            if (sender.delta() >= 0L) {
+                throw new IllegalArgumentException("transfer sender change must be a debit");
+            }
+            if (receiver.delta() <= 0L) {
+                throw new IllegalArgumentException("transfer receiver change must be a credit");
+            }
+            if (Math.addExact(sender.delta(), receiver.delta()) != 0L) {
                 throw new IllegalArgumentException("transfer changes must conserve the total balance");
+            }
+            if (sender.relatedPlayerId().isEmpty() || !sender.relatedPlayerId().get().equals(receiver.playerId())) {
+                throw new IllegalArgumentException("transfer sender change must reference the receiver");
+            }
+            if (receiver.relatedPlayerId().isEmpty() || !receiver.relatedPlayerId().get().equals(sender.playerId())) {
+                throw new IllegalArgumentException("transfer receiver change must reference the sender");
             }
             return;
         }

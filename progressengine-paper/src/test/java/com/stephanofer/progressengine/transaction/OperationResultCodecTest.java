@@ -41,6 +41,29 @@ final class OperationResultCodecTest {
     }
 
     @Test
+    void transferSuccessPayloadReconstructsBothDirectedChanges() {
+        UUID receiverId = UUID.fromString("223e4567-e89b-12d3-a456-426614174000");
+        BalanceChange sender = BalanceChange.related(this.playerId, receiverId, -50L, 100L, 50L, 3L);
+        BalanceChange receiver = BalanceChange.related(receiverId, this.playerId, 50L, 10L, 60L, 8L);
+        StoredOperation operation = operation(
+            OperationType.TRANSFER,
+            OperationStatus.SUCCESS,
+            Optional.of(receiverId),
+            50L,
+            OperationResultCodec.transferSuccessPayload(sender, receiver)
+        );
+
+        DecodedOperationResult.Success decoded = (DecodedOperationResult.Success) OperationResultCodec.decode(
+            operation,
+            ReplayStatus.REPLAYED
+        );
+
+        assertEquals(ReplayStatus.REPLAYED, decoded.replayStatus());
+        assertEquals(OperationType.TRANSFER, decoded.receipt().type());
+        assertEquals(java.util.List.of(sender, receiver), decoded.receipt().changes());
+    }
+
+    @Test
     void rejectionPayloadMustBeEmptyObject() {
         StoredOperation operation = operation(OperationStatus.INSUFFICIENT_FUNDS, OperationResultCodec.rejectionPayload());
 
@@ -70,18 +93,42 @@ final class OperationResultCodecTest {
         ));
     }
 
+    @Test
+    void transferPayloadRejectsCorruptShapeAndAmounts() {
+        UUID receiverId = UUID.fromString("223e4567-e89b-12d3-a456-426614174000");
+
+        assertThrows(PersistenceDataException.class, () -> OperationResultCodec.decode(
+            operation(OperationType.TRANSFER, OperationStatus.SUCCESS, Optional.of(receiverId), 50L,
+                OperationResultPayload.of(1, "{\"balance_before\":1,\"balance_after\":2,\"revision\":1}")),
+            ReplayStatus.ORIGINAL
+        ));
+        assertThrows(PersistenceDataException.class, () -> OperationResultCodec.decode(
+            operation(OperationType.TRANSFER, OperationStatus.SUCCESS, Optional.of(receiverId), 51L,
+                OperationResultCodec.transferSuccessPayload(
+                    BalanceChange.related(this.playerId, receiverId, -50L, 100L, 50L, 3L),
+                    BalanceChange.related(receiverId, this.playerId, 50L, 10L, 60L, 8L)
+                )),
+            ReplayStatus.ORIGINAL
+        ));
+    }
+
     private StoredOperation operation(OperationStatus status, OperationResultPayload payload) {
+        return operation(OperationType.CREDIT, status, Optional.empty(), 50L, payload);
+    }
+
+    private StoredOperation operation(OperationType type, OperationStatus status, Optional<UUID> relatedPlayerId, long amount,
+                                      OperationResultPayload payload) {
         byte[] fingerprint = new byte[32];
         fingerprint[0] = 1;
         return new StoredOperation(
             OperationId.generate(),
             1,
             fingerprint,
-            OperationType.CREDIT,
+            type,
             status,
             this.playerId,
-            Optional.empty(),
-            50L,
+            relatedPlayerId,
+            amount,
             OperationActor.plugin(),
             new OperationSource("TestPlugin", "server-a"),
             OperationReason.of("test:credit"),

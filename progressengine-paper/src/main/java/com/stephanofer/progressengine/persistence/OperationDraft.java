@@ -63,6 +63,12 @@ public final class OperationDraft {
         });
         this.relatedPlayerId = relatedPlayerId;
         if (requestedAmount < 0L) throw new IllegalArgumentException("requestedAmount cannot be negative");
+        if (type == OperationType.TRANSFER) {
+            if (relatedPlayerId.isEmpty()) throw new IllegalArgumentException("transfer requires relatedPlayerId");
+            if (requestedAmount <= 0L) throw new IllegalArgumentException("transfer requestedAmount must be positive");
+        } else if (relatedPlayerId.isPresent()) {
+            throw new IllegalArgumentException(type + " cannot include relatedPlayerId");
+        }
         this.requestedAmount = requestedAmount;
         this.actor = Objects.requireNonNull(actor, "actor");
         this.source = Objects.requireNonNull(source, "source");

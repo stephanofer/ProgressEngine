@@ -2,9 +2,7 @@ package com.stephanofer.progressengine.transaction;
 
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Comparator;
 import java.util.HashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -62,21 +60,7 @@ public final class AccountMutationSequencer {
     }
 
     private static List<UUID> canonicalKeys(Collection<UUID> playerIds) {
-        Objects.requireNonNull(playerIds, "playerIds");
-        LinkedHashSet<UUID> deduplicated = new LinkedHashSet<>();
-        for (UUID playerId : playerIds) {
-            if (playerId == null) throw new NullPointerException("playerId cannot be null");
-            if (playerId.getMostSignificantBits() == 0L && playerId.getLeastSignificantBits() == 0L) {
-                throw new IllegalArgumentException("playerId cannot be nil");
-            }
-            deduplicated.add(playerId);
-        }
-        if (deduplicated.isEmpty()) {
-            throw new IllegalArgumentException("At least one playerId is required");
-        }
-        return deduplicated.stream()
-            .sorted(Comparator.comparing(UUID::toString))
-            .toList();
+        return CanonicalAccountOrder.sort(playerIds);
     }
 
     private static <T> CompletableFuture<T> copyOf(CompletableFuture<T> internal) {

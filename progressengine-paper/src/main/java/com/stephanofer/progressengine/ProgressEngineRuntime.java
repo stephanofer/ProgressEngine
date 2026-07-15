@@ -1,5 +1,10 @@
 package com.stephanofer.progressengine;
 
+import com.stephanofer.progressengine.account.AccountEconomy;
+import com.stephanofer.progressengine.account.BalanceStore;
+import com.stephanofer.progressengine.account.BukkitPostCommitEventDispatcher;
+import com.stephanofer.progressengine.account.PostCommitPublisher;
+import com.stephanofer.progressengine.api.source.OperationSource;
 import com.stephanofer.progressengine.config.BoostedYamlConfigurationLoader;
 import com.stephanofer.progressengine.config.ConfigurationManager;
 import com.stephanofer.progressengine.config.ConfigurationProblem;
@@ -29,6 +34,8 @@ public final class ProgressEngineRuntime implements AutoCloseable {
     private final ConfigurationManager configurationManager;
     private final AtomicBoolean shutdownStarted = new AtomicBoolean();
     private final AtomicReference<ProgressPersistence> persistence = new AtomicReference<>();
+    private final AtomicReference<BalanceStore> balanceStore = new AtomicReference<>();
+    private final AtomicReference<AccountEconomy> accountEconomy = new AtomicReference<>();
 
     private ProgressEngineRuntime(
         JavaPlugin plugin,
@@ -93,6 +100,22 @@ public final class ProgressEngineRuntime implements AutoCloseable {
         ProgressPersistence value = this.persistence.get();
         if (value == null) {
             throw new IllegalStateException("ProgressEngine persistence is not initialized");
+        }
+        return value;
+    }
+
+    public BalanceStore balanceStore() {
+        BalanceStore value = this.balanceStore.get();
+        if (value == null) {
+            throw new IllegalStateException("ProgressEngine balance store is not initialized");
+        }
+        return value;
+    }
+
+    public AccountEconomy accountEconomy() {
+        AccountEconomy value = this.accountEconomy.get();
+        if (value == null) {
+            throw new IllegalStateException("ProgressEngine account economy is not initialized");
         }
         return value;
     }
@@ -173,8 +196,41 @@ public final class ProgressEngineRuntime implements AutoCloseable {
                 disableOnMainThread();
                 return;
             }
-            this.plugin.getLogger().info("ProgressEngine database migrated. Runtime remains STARTING until the economic service is fully connected.");
+            initializeEconomicRuntime(created, snapshot);
         });
+    }
+
+    private void initializeEconomicRuntime(ProgressPersistence persistence, ConfigurationSnapshot snapshot) {
+        if (this.lifecycle.state() == RuntimeState.SHUTTING_DOWN || this.lifecycle.state() == RuntimeState.CLOSED) {
+            return;
+        }
+
+        BalanceStore store = new BalanceStore(persistence, snapshot.config().cache(), this.inFlightTracker, Clock.systemUTC());
+        PostCommitPublisher postCommitPublisher = new PostCommitPublisher(
+            store,
+            new BukkitPostCommitEventDispatcher(this.plugin, this.plugin.getLogger()),
+            this.plugin.getLogger()
+        );
+        AccountEconomy economy = new AccountEconomy(
+            persistence,
+            new OperationSource(this.plugin.getName(), snapshot.config().serverId()),
+            () -> this.configurationManager.activeSnapshot()
+                .map(active -> active.config().economy().maximumBalance())
+                .orElse(snapshot.config().economy().maximumBalance()),
+            new com.stephanofer.progressengine.transaction.AccountMutationSequencer(),
+            postCommitPublisher
+        );
+
+        if (!this.balanceStore.compareAndSet(null, store)) {
+            store.close();
+            throw new IllegalStateException("ProgressEngine balance store was already initialized");
+        }
+        if (!this.accountEconomy.compareAndSet(null, economy)) {
+            store.close();
+            throw new IllegalStateException("ProgressEngine account economy was already initialized");
+        }
+        this.resources.register("balance-store", store);
+        this.plugin.getLogger().info("ProgressEngine cache and post-commit runtime initialized. Public service remains hidden until later blocks are complete.");
     }
 
     private void transitionDatabaseUnavailable() {

@@ -65,6 +65,12 @@ public final class StoredOperation {
         });
         this.relatedPlayerId = relatedPlayerId;
         if (requestedAmount < 0L) throw new PersistenceDataException("Stored requested amount cannot be negative");
+        if (type == OperationType.TRANSFER) {
+            if (relatedPlayerId.isEmpty()) throw new PersistenceDataException("Stored transfer is missing relatedPlayerId");
+            if (requestedAmount <= 0L) throw new PersistenceDataException("Stored transfer requested amount must be positive");
+        } else if (relatedPlayerId.isPresent()) {
+            throw new PersistenceDataException("Stored " + type + " cannot include relatedPlayerId");
+        }
         this.requestedAmount = requestedAmount;
         this.actor = Objects.requireNonNull(actor, "actor");
         this.source = Objects.requireNonNull(source, "source");

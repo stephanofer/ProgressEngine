@@ -6,6 +6,7 @@ import com.google.gson.JsonParseException;
 import com.google.gson.JsonParser;
 import com.google.gson.JsonPrimitive;
 import com.stephanofer.progressengine.api.operation.OperationMetadata;
+import com.stephanofer.progressengine.api.operation.OperationType;
 import com.stephanofer.progressengine.api.operation.ReplayStatus;
 import com.stephanofer.progressengine.api.transaction.BalanceChange;
 import com.stephanofer.progressengine.api.transaction.OperationReceipt;
@@ -21,16 +22,38 @@ import java.util.Set;
 
 public final class OperationResultCodec {
     public static final int CURRENT_VERSION = 1;
-    private static final Set<String> SUCCESS_FIELDS = Set.of("balance_before", "balance_after", "revision");
+    private static final Set<String> SINGLE_SUCCESS_FIELDS = Set.of("balance_before", "balance_after", "revision");
+    private static final Set<String> TRANSFER_SUCCESS_FIELDS = Set.of(
+        "sender_balance_before",
+        "sender_balance_after",
+        "sender_revision",
+        "receiver_balance_before",
+        "receiver_balance_after",
+        "receiver_revision"
+    );
 
     private OperationResultCodec() {
     }
 
     public static OperationResultPayload successPayload(BalanceChange change) {
         Objects.requireNonNull(change, "change");
+        if (change.relatedPlayerId().isPresent()) {
+            throw new IllegalArgumentException("single-account success payload cannot include relatedPlayerId");
+        }
         String json = "{\"balance_before\":" + change.balanceBefore()
             + ",\"balance_after\":" + change.balanceAfter()
             + ",\"revision\":" + change.revision() + '}';
+        return OperationResultPayload.of(CURRENT_VERSION, json);
+    }
+
+    public static OperationResultPayload transferSuccessPayload(BalanceChange sender, BalanceChange receiver) {
+        validateTransferChanges(sender, receiver);
+        String json = "{\"sender_balance_before\":" + sender.balanceBefore()
+            + ",\"sender_balance_after\":" + sender.balanceAfter()
+            + ",\"sender_revision\":" + sender.revision()
+            + ",\"receiver_balance_before\":" + receiver.balanceBefore()
+            + ",\"receiver_balance_after\":" + receiver.balanceAfter()
+            + ",\"receiver_revision\":" + receiver.revision() + '}';
         return OperationResultPayload.of(CURRENT_VERSION, json);
     }
 
@@ -55,8 +78,14 @@ public final class OperationResultCodec {
             requireEmptyObject(json, "rejected operation result");
             return new DecodedOperationResult.Rejected(operation.operationId(), operation.status(), replayStatus);
         }
+        return operation.type() == OperationType.TRANSFER
+            ? decodeTransferSuccess(operation, replayStatus, json)
+            : decodeSingleSuccess(operation, replayStatus, json);
+    }
+
+    private static DecodedOperationResult decodeSingleSuccess(StoredOperation operation, ReplayStatus replayStatus, String json) {
         JsonObject object = object(json, "success operation result");
-        if (!object.keySet().equals(SUCCESS_FIELDS)) {
+        if (!object.keySet().equals(SINGLE_SUCCESS_FIELDS)) {
             throw new PersistenceDataException("Success result payload has unexpected fields: " + object.keySet());
         }
         long balanceBefore = longField(object, "balance_before");
@@ -80,6 +109,66 @@ public final class OperationResultCodec {
             operation.completedAt().orElseThrow(() -> new PersistenceDataException("Success operation is missing completedAt"))
         );
         return new DecodedOperationResult.Success(receipt, replayStatus);
+    }
+
+    private static DecodedOperationResult decodeTransferSuccess(StoredOperation operation, ReplayStatus replayStatus, String json) {
+        JsonObject object = object(json, "transfer success operation result");
+        if (!object.keySet().equals(TRANSFER_SUCCESS_FIELDS)) {
+            throw new PersistenceDataException("Transfer success result payload has unexpected fields: " + object.keySet());
+        }
+        java.util.UUID receiverId = operation.relatedPlayerId()
+            .orElseThrow(() -> new PersistenceDataException("Transfer success is missing relatedPlayerId"));
+        long amount = operation.requestedAmount();
+        BalanceChange sender = BalanceChange.related(
+            operation.playerId(),
+            receiverId,
+            Math.subtractExact(longField(object, "sender_balance_after"), longField(object, "sender_balance_before")),
+            longField(object, "sender_balance_before"),
+            longField(object, "sender_balance_after"),
+            longField(object, "sender_revision")
+        );
+        BalanceChange receiver = BalanceChange.related(
+            receiverId,
+            operation.playerId(),
+            Math.subtractExact(longField(object, "receiver_balance_after"), longField(object, "receiver_balance_before")),
+            longField(object, "receiver_balance_before"),
+            longField(object, "receiver_balance_after"),
+            longField(object, "receiver_revision")
+        );
+        if (sender.delta() != -amount) {
+            throw new PersistenceDataException("Transfer sender delta does not match requested amount");
+        }
+        if (receiver.delta() != amount) {
+            throw new PersistenceDataException("Transfer receiver delta does not match requested amount");
+        }
+        OperationReceipt receipt = new OperationReceipt(
+            operation.operationId(),
+            operation.type(),
+            operation.reason(),
+            operation.actor(),
+            operation.source(),
+            metadata(operation.metadataJson()),
+            List.of(sender, receiver),
+            operation.completedAt().orElseThrow(() -> new PersistenceDataException("Success operation is missing completedAt"))
+        );
+        return new DecodedOperationResult.Success(receipt, replayStatus);
+    }
+
+    private static void validateTransferChanges(BalanceChange sender, BalanceChange receiver) {
+        Objects.requireNonNull(sender, "sender");
+        Objects.requireNonNull(receiver, "receiver");
+        if (sender.delta() >= 0L || receiver.delta() <= 0L) {
+            throw new IllegalArgumentException("transfer payload requires sender debit and receiver credit");
+        }
+        if (Math.addExact(sender.delta(), receiver.delta()) != 0L) {
+            throw new IllegalArgumentException("transfer payload must conserve balance");
+        }
+        if (sender.relatedPlayerId().isEmpty() || !sender.relatedPlayerId().get().equals(receiver.playerId())) {
+            throw new IllegalArgumentException("sender change must reference receiver");
+        }
+        if (receiver.relatedPlayerId().isEmpty() || !receiver.relatedPlayerId().get().equals(sender.playerId())) {
+            throw new IllegalArgumentException("receiver change must reference sender");
+        }
     }
 
     private static OperationMetadata metadata(String json) {

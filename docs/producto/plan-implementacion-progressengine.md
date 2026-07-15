@@ -196,13 +196,13 @@ Se aplican estas reglas durante todo el plan:
 
 **El bloque se considera terminado cuando:**
 
-- [ ] Reutilizar un `OperationId` idéntico devuelve el resultado durable original.
-- [ ] Reutilizarlo con otro fingerprint produce conflicto sin mutación.
-- [ ] Dos débitos concurrentes no gastan el mismo saldo.
-- [ ] Ninguna operación confirma antes del commit.
-- [ ] Cada movimiento confirmado tiene balance anterior, posterior y revisión correctos.
+- [x] Reutilizar un `OperationId` idéntico devuelve el resultado durable original.
+- [x] Reutilizarlo con otro fingerprint produce conflicto sin mutación.
+- [x] Dos débitos concurrentes no gastan el mismo saldo.
+- [x] Ninguna operación confirma antes del commit.
+- [x] Cada movimiento confirmado tiene balance anterior, posterior y revisión correctos.
 
-**Constancia de cierre:** [ ] Terminado | Fecha: __________ | 
+**Constancia de cierre:** [x] Terminado | Fecha: 7/14/26 | 
 
 ## Bloque 5: Transferencias atómicas
 
@@ -227,12 +227,12 @@ Se aplican estas reglas durante todo el plan:
 
 **El bloque se considera terminado cuando:**
 
-- [ ] No existe estado observable con una transferencia aplicada parcialmente.
-- [ ] Los locks se toman siempre en orden canónico explícito.
-- [ ] Deadlocks y timeouts clasificados se reintentan de forma segura.
-- [ ] La suma se conserva en todos los casos exitosos.
+- [x] No existe estado observable con una transferencia aplicada parcialmente.
+- [x] Los locks se toman siempre en orden canónico explícito.
+- [x] Deadlocks y timeouts clasificados se reintentan de forma segura.
+- [x] La suma se conserva en todos los casos exitosos.
 
-**Constancia de cierre:** [ ] Terminado | Fecha: __________ | 
+**Constancia de cierre:** [x] Terminado | Fecha: 7/14/26 | 
 
 ## Bloque 6: Caché, cargas y publicación post-commit
 

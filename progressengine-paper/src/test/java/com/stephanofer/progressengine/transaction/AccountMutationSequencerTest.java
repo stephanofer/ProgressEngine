@@ -87,4 +87,12 @@ final class AccountMutationSequencerTest {
         assertTrue(ran.get());
         assertEquals(0, sequencer.trackedKeys());
     }
+
+    @Test
+    void canonicalOrderUsesUnsignedBinaryUuidLayout() {
+        UUID low = UUID.fromString("00000000-0000-0000-0000-000000000001");
+        UUID highSigned = UUID.fromString("80000000-0000-0000-0000-000000000000");
+
+        assertEquals(List.of(low, highSigned), CanonicalAccountOrder.sort(List.of(highSigned, low)));
+    }
 }

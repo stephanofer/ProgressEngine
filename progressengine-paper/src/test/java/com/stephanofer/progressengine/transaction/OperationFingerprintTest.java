@@ -39,6 +39,22 @@ final class OperationFingerprintTest {
     }
 
     @Test
+    void transferFingerprintIsDirectionalAndIncludesReceiver() {
+        UUID receiver = UUID.fromString("223e4567-e89b-12d3-a456-426614174000");
+        UUID otherReceiver = UUID.fromString("323e4567-e89b-12d3-a456-426614174000");
+
+        byte[] original = OperationFingerprint.current(OperationType.TRANSFER, this.playerId, Optional.of(receiver),
+            100L, this.reason, OperationActor.plugin(), "TestPlugin");
+
+        assertFalse(Arrays.equals(original, OperationFingerprint.current(OperationType.TRANSFER, receiver, Optional.of(this.playerId),
+            100L, this.reason, OperationActor.plugin(), "TestPlugin")));
+        assertFalse(Arrays.equals(original, OperationFingerprint.current(OperationType.TRANSFER, this.playerId, Optional.of(otherReceiver),
+            100L, this.reason, OperationActor.plugin(), "TestPlugin")));
+        assertTrue(OperationFingerprint.matches(original, OperationFingerprint.CURRENT_VERSION, OperationType.TRANSFER,
+            this.playerId, Optional.of(receiver), 100L, this.reason, OperationActor.plugin(), "TestPlugin"));
+    }
+
+    @Test
     void unsupportedStoredVersionFailsClosed() {
         byte[] original = fingerprint(100L, "TestPlugin", OperationActor.plugin());
 
