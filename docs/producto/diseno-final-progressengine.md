@@ -238,6 +238,7 @@ La política es configurable como decisión del recurso, no por consumidor indiv
 
 - Awards, créditos, débitos y transferencias requieren cantidades positivas.
 - Cero y negativos se rechazan antes de abrir una transacción.
+- Si un `award` con base positiva termina en cero exclusivamente por `FLOOR`, se resuelve como `NO_POINTS_AWARDED`: conserva el desglose del cálculo e idempotencia, pero no crea ledger ni modifica el balance.
 - Penalizaciones se expresan como débitos, no como awards negativos.
 - Set acepta `0..maximumBalance`.
 - Reset equivale a set de cero con un tipo y una razón específicos.
@@ -388,7 +389,6 @@ La tabla aplica constraints compatibles con MySQL para no negatividad y máximo 
 | --- | --- |
 | `operation_id` | Clave idempotente única |
 | `request_fingerprint` | Detecta reutilización incorrecta del ID |
-| `correlation_id` | Agrupa movimientos relacionados |
 | `type` | Tipo de operación |
 | `status` | Resultado durable |
 | `actor_type` | Sistema, plugin, jugador o consola |
@@ -460,20 +460,88 @@ Los índices finales se validan con planes de ejecución sobre MySQL real antes 
 
 ### 9.1 `OperationId`
 
-Cada mutación usa un identificador estable. Las factories pueden generar uno, pero un consumidor que necesite retry debe conservar el mismo request y el mismo ID.
+Cada mutación usa un `OperationId` globalmente único que identifica una intención económica concreta. Es el único identificador público de esa intención en requests, receipts, eventos y mensajes Redis. Una intención nueva requiere un ID nuevo; todo retry de esa misma intención debe reutilizar el ID y el request originales.
+
+`OperationId` es un value object público e inmutable respaldado por UUID. La API proporciona la utilidad mínima necesaria:
+
+```java
+OperationId generated = OperationId.generate();
+OperationId existing = OperationId.of(existingUuid);
+OperationId restored = OperationId.parse(persistedValue);
+```
+
+- `generate()` crea un UUID aleatorio mediante la capacidad segura del JDK, sin coordinación entre servidores.
+- `of(UUID)` permite reutilizar el UUID durable de un evento, compra o reward del plugin consumidor.
+- `parse(String)` reconstruye un ID persistido usando su representación UUID canónica.
+- UUID nulo, texto inválido y UUID nil (`00000000-0000-0000-0000-000000000000`) se rechazan.
+- `toString()` devuelve la representación UUID canónica para logs y persistencia externa.
+- No existe un servicio generador adicional ni una llamada remota para crear IDs.
+
+La generación nunca ocurre silenciosamente dentro de `award`, `credit`, `debit`, `transfer` o las factories principales de requests. Si ProgressEngine generara un ID nuevo en cada ejecución, no podría reconocer que una segunda llamada es un retry o un evento duplicado.
+
+Uso correcto:
+
+```java
+OperationId operationId = OperationId.generate();
+DebitRequest request = new DebitRequest(
+    operationId,
+    playerId,
+    500L,
+    OperationReason.of("hera_shop:diamond_sword")
+);
+
+pointsService.debit(request);
+// Ante timeout o respuesta ambigua se reenvía el mismo request.
+pointsService.debit(request);
+```
+
+Uso incorrecto:
+
+```java
+// Un ID nuevo convierte el retry en otra intención económica.
+pointsService.debit(new DebitRequest(
+    OperationId.generate(),
+    playerId,
+    500L,
+    OperationReason.of("hera_shop:diamond_sword")
+));
+```
+
+El plugin consumidor es responsable de:
+
+- generar un ID antes de enviar una intención nueva;
+- conservar el request y su ID mientras el resultado pueda ser ambiguo;
+- persistir el ID si necesita reintentar después de reiniciar;
+- reutilizar un identificador durable propio mediante `of(UUID)` cuando ya lo tenga;
+- no derivar IDs con `String#hashCode`, timestamps aislados, nombres de jugador ni otros valores con colisiones previsibles.
+
+ProgressEngine es responsable de persistir el ID, aplicar su unique key y devolver el resultado durable sin duplicar el efecto. Dos operaciones legítimas con los mismos jugador, cantidad y razón usan IDs diferentes, aunque produzcan el mismo fingerprint.
 
 ### 9.2 Fingerprint
 
-El fingerprint cubre los campos económicos relevantes:
+El fingerprint es interno; los plugins consumidores no lo crean, reciben ni persisten. ProgressEngine lo calcula de manera determinista para comprobar que un `OperationId` reutilizado conserva exactamente la misma intención.
+
+El fingerprint cubre los campos relevantes:
 
 - tipo;
 - cuenta o cuentas;
 - cantidad;
 - razón;
 - plugin origen;
+- actor;
 - campos que cambien el efecto económico.
 
-Metadata puramente diagnóstica solo forma parte si su cambio altera el significado de la operación.
+La metadata puramente diagnóstica no forma parte. Si un dato cambia el efecto económico, debe ser un campo tipado del request y no metadata genérica.
+
+La representación canónica es versionada, usa un orden fijo y codificación inequívoca antes de aplicar SHA-256. No se basa en `Object#hashCode`, `toString()` de records, orden de mapas ni serialización dependiente de la JVM. Una versión ya persistida conserva siempre la misma interpretación.
+
+Las tres combinaciones normativas son:
+
+```text
+mismo OperationId + mismo fingerprint     -> replay del resultado durable
+mismo OperationId + diferente fingerprint -> IDEMPOTENCY_CONFLICT
+distinto OperationId                       -> intención nueva, aunque el fingerprint coincida
+```
 
 ### 9.3 Resolución transaccional
 
@@ -529,6 +597,7 @@ validar base positiva
   -> asegurar snapshot de NetworkBoosters
   -> calcular BoostCalculation
   -> aplicar FLOOR
+  -> si el resultado es cero, resolver NO_POINTS_AWARDED sin movimiento
   -> validar long y máximo
   -> crédito transaccional
   -> resultado con desglose
@@ -689,7 +758,7 @@ Payload mínimo:
 ```text
 playerId
 revision
-transactionId
+operationId
 sourceServerId
 ```
 
@@ -707,7 +776,7 @@ Al recibirlo:
 El aviso puede incluir:
 
 ```text
-transactionId
+operationId
 senderId
 receiverId
 amount
@@ -715,7 +784,7 @@ receiverRevision
 sourceServerId
 ```
 
-Se deduplica por `transactionId`. Si el receptor está online en otro servidor, recibe feedback. Si está completamente offline, Pub/Sub no garantiza entrega y no se crea una bandeja durable en la versión inicial.
+Se deduplica por `operationId`. Si el receptor está online en otro servidor, recibe feedback. Si está completamente offline, Pub/Sub no garantiza entrega y no se crea una bandeja durable en la versión inicial.
 
 El éxito del emisor nunca depende de este aviso.
 
@@ -783,6 +852,11 @@ El contrato conceptual es:
 ```java
 public interface PointsService {
 
+    PointsClient client(Plugin plugin);
+}
+
+public interface PointsClient {
+
     Optional<BalanceSnapshot> cached(UUID playerId);
 
     CompletableFuture<BalanceSnapshot> load(UUID playerId);
@@ -800,10 +874,12 @@ public interface PointsService {
     CompletableFuture<TransferResult> transfer(TransferRequest request);
 
     CompletableFuture<SetBalanceResult> setBalance(SetBalanceRequest request);
+
+    CompletableFuture<ResetBalanceResult> resetBalance(ResetBalanceRequest request);
 }
 ```
 
-Los nombres exactos podrán ajustarse durante la implementación si mejora la coherencia Java, sin cambiar los contratos establecidos aquí.
+`PointsService` se obtiene desde Bukkit `ServicesManager` y entrega un `PointsClient` ligado al plugin consumidor. Esa ligadura permite atribuir `source_plugin` sin pedir al consumidor que escriba manualmente su propio nombre en cada request. Los nombres exactos podrán ajustarse durante la implementación si mejora la coherencia Java, sin cambiar los contratos establecidos aquí.
 
 ### 16.2 Threading
 
@@ -815,19 +891,21 @@ Los nombres exactos podrán ajustarse durante la implementación si mejora la co
 
 ### 16.3 Resultados de negocio
 
-Estados mínimos según operación:
+Resultados mínimos según operación:
 
 ```text
 SUCCESS
-REPLAYED
+NO_POINTS_AWARDED
 INSUFFICIENT_FUNDS
 BALANCE_LIMIT_EXCEEDED
 CANCELLED
 SELF_TRANSFER_REJECTED
-UNKNOWN_TARGET
-NOT_READY
 IDEMPOTENCY_CONFLICT
 ```
+
+`REPLAYED` no es un outcome económico independiente. Es una propiedad del resultado durable devuelto cuando el mismo `OperationId` y el mismo fingerprint ya fueron resueltos. Un replay puede devolver un éxito o un rechazo económico durable como `INSUFFICIENT_FUNDS`.
+
+`UNKNOWN_TARGET` pertenece a la resolución de nombres de comandos y no al núcleo económico por UUID. `NOT_READY` pertenece al lifecycle del jugador y a las integraciones de gameplay; las mutaciones económicas por UUID no lo usan como resultado de negocio.
 
 Las excepciones se reservan para:
 
@@ -842,7 +920,6 @@ Un recibo exitoso incluye como mínimo:
 
 ```text
 operationId
-transactionId o correlationId
 playerId
 type
 delta
@@ -865,7 +942,7 @@ La metadata pública tendrá límites de:
 - tamaño serializado total;
 - caracteres permitidos en keys.
 
-No se aceptan objetos arbitrarios ni datos sensibles.
+El tamaño serializado se mide sobre el JSON canónico de ProgressEngine: object con keys ordenadas lexicográficamente, strings JSON escapados de forma determinista y UTF-8. El runtime persiste ese mismo formato; no se mide una estimación basada solo en los bytes de keys y values. No se aceptan objetos arbitrarios ni datos sensibles.
 
 ### 16.6 Registro
 
@@ -958,7 +1035,7 @@ No se ofrece un evento modificable para débitos o transferencias. Alterar preci
 
 `PointsTransactionCommittedEvent` representa commits originados localmente. Un servidor remoto no inventa ese evento al recibir Pub/Sub.
 
-Después de refrescar un balance remoto puede emitir `PointsBalanceChangedEvent` con `origin = REMOTE`, revisión y transaction ID conocidos.
+Después de refrescar un balance remoto puede emitir `PointsBalanceChangedEvent` con `origin = REMOTE`, revisión y `OperationId` conocidos.
 
 ### 18.5 Orden del future
 
@@ -1408,7 +1485,7 @@ CLOSED
 - No se emiten eventos de éxito.
 - No se entrega una compra como confirmada.
 - Los snapshots existentes pueden mostrarse como última lectura conocida.
-- Jugadores no cargados permanecen `NOT_READY`.
+- Jugadores no cargados permanecen sin readiness; no se representa ese estado como balance cero.
 - Nunca se sustituye el fallo por balance cero.
 
 ### 27.2 Redis no disponible

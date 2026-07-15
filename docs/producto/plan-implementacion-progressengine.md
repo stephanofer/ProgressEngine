@@ -64,15 +64,20 @@ Se aplican estas reglas durante todo el plan:
 - Verificar compilación, tests, sources JAR y Javadocs de ambos módulos.
 - Mantener el build libre de Testcontainers.
 
-- Implementar identificadores de operación y correlación, tipos de operación, razón, actor, origen y metadata acotada.
+- Implementar `OperationId` como value object UUID inmutable con `generate()`, `of(UUID)`, `parse(String)` y representación canónica.
+- Documentar y probar que una intención nueva usa un ID nuevo, mientras todo retry reutiliza el mismo request y el mismo ID.
+- Rechazar UUID nulo, UUID nil y representaciones inválidas sin introducir un servicio generador adicional.
+- Implementar tipos de operación, `OperationReason`, actor, origen y metadata acotada.
 - Implementar `BalanceSnapshot`, recibos y estados económicos inmutables.
 - Centralizar validaciones puras de UUID, cantidades, rango, razón y metadata sin acoplarlas a Paper o infraestructura.
 - Probar límites de `long`, cero, negativos, nombres inválidos y metadata excesiva.
 
 - Implementar requests inmutables para award, credit, debit, transfer y set/reset.
 - Implementar resultados tipados que diferencien éxito, replay y rechazos de negocio.
-- Definir `PointsService` con lecturas síncronas sin I/O y operaciones asíncronas.
+- Modelar `NO_POINTS_AWARDED` para el resultado cero derivado exclusivamente de `FLOOR`, sin receipt ni ledger y con replay durable.
+- Definir `PointsService` como entrada de `ServicesManager` y `PointsClient` ligado al plugin consumidor, con lecturas síncronas sin I/O y operaciones asíncronas.
 - Evitar booleanos ambiguos y excepciones para resultados económicos esperables.
+- Mantener el fingerprint como detalle interno: ningún consumidor lo calcula o lo envía en un request.
 
 - Definir los cuatro eventos Paper iniciales y sus datos inmutables.
 - Limitar la mutabilidad al prepare cancelable de award.
@@ -83,6 +88,7 @@ Se aplican estas reglas durante todo el plan:
 
 - [ ] El API compila sin depender de CraftKit, Redis, Caffeine, BoostedYAML o implementaciones runtime.
 - [ ] Los modelos públicos son inmutables y expresan todos los outcomes mínimos.
+- [ ] `OperationId` permite generación local segura, encapsulado y restauración canónica, con semántica de retry documentada y probada.
 - [ ] Validación, aritmética, metadata y contratos tienen pruebas unitarias.
 - [ ] El artefacto API produce JAR, sources y Javadocs correctamente.
 
@@ -167,7 +173,8 @@ Se aplican estas reglas durante todo el plan:
 
 **Trabajo incluido:**
 
-- Implementar fingerprint determinista sobre todos los campos económicos relevantes.
+- Implementar fingerprint SHA-256 determinista y versionado sobre una representación canónica de todos los campos relevantes.
+- Confirmar que distinto `OperationId` permite operaciones legítimas con el mismo fingerprint y que el fingerprint nunca forma parte de la API consumidora.
 - Resolver reserva, replay y conflicto dentro de la misma transacción.
 - Implementar aritmética exacta sobre el balance bloqueado y validación de `maximumBalance`.
 - Persistir rechazos económicos resueltos y no persistir fallos previos o rollbacks.
@@ -281,6 +288,7 @@ Se aplican estas reglas durante todo el plan:
 - Revalidar la cantidad después de listeners y respetar cancelación.
 - Ejecutar el crédito transaccional idempotente con tipo award.
 - Construir el resultado con base, multiplicador, final, boosters, cap y recibo.
+- Resolver un resultado `NO_POINTS_AWARDED` durable cuando `FLOOR` produzca cero, sin crear movimiento ni ledger.
 
 - Probar booster no listo, carga fallida, multiplicador extremo, cap, decimales y overflow.
 - Probar rollout sin NetworkBoosters sin simular que hubo boosters.

@@ -3,6 +3,40 @@ plugins {
     alias(libs.plugins.shadow)
 }
 
+val integrationTestSourceSet = sourceSets.create("integrationTest") {
+    java.srcDir("src/integrationTest/java")
+    resources.srcDir("src/integrationTest/resources")
+    compileClasspath += sourceSets.main.get().output + configurations.testRuntimeClasspath.get()
+    runtimeClasspath += output + compileClasspath
+}
+
+configurations.named(integrationTestSourceSet.implementationConfigurationName) {
+    extendsFrom(configurations.testImplementation.get())
+}
+
+configurations.named(integrationTestSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom(configurations.testRuntimeOnly.get())
+}
+
+val validateIntegrationTestEnvironment = tasks.register("validateIntegrationTestEnvironment") {
+    group = "verification"
+    description = "Validates ProgressEngine external integration test environment variables."
+
+    doLast {
+        val names = listOf(
+            "PROGRESSENGINE_TEST_DB_HOST",
+            "PROGRESSENGINE_TEST_DB_PORT",
+            "PROGRESSENGINE_TEST_DB_NAME",
+            "PROGRESSENGINE_TEST_DB_USER",
+            "PROGRESSENGINE_TEST_DB_PASSWORD"
+        )
+        val missing = names.filter { System.getenv(it).isNullOrBlank() }
+        if (missing.isNotEmpty() && missing.size != names.size) {
+            throw GradleException("Missing ProgressEngine integration test variables: ${missing.joinToString()}")
+        }
+    }
+}
+
 dependencies {
     implementation(project(":progressengine-api"))
 
@@ -18,6 +52,9 @@ dependencies {
     implementation(libs.cloud.paper)
     implementation(libs.cloud.minecraft.extras)
     implementation(libs.gson)
+
+    testImplementation(libs.junit.jupiter)
+    testRuntimeOnly(libs.junit.platform.launcher)
 }
 
 tasks {
@@ -62,5 +99,40 @@ tasks {
 
     assemble {
         dependsOn(shadowJar)
+    }
+
+    register<Test>("integrationTest") {
+        description = "Runs ProgressEngine integration tests against externally managed services."
+        group = "verification"
+        testClassesDirs = integrationTestSourceSet.output.classesDirs
+        classpath = integrationTestSourceSet.runtimeClasspath
+        shouldRunAfter(test)
+        dependsOn(validateIntegrationTestEnvironment)
+
+        onlyIf("ProgressEngine external MySQL variables are partially or fully configured") {
+            val names = listOf(
+                "PROGRESSENGINE_TEST_DB_HOST",
+                "PROGRESSENGINE_TEST_DB_PORT",
+                "PROGRESSENGINE_TEST_DB_NAME",
+                "PROGRESSENGINE_TEST_DB_USER",
+                "PROGRESSENGINE_TEST_DB_PASSWORD"
+            )
+            val missing = names.filter { System.getenv(it).isNullOrBlank() }
+            missing.size != names.size
+        }
+
+        doFirst {
+            val names = listOf(
+                "PROGRESSENGINE_TEST_DB_HOST",
+                "PROGRESSENGINE_TEST_DB_PORT",
+                "PROGRESSENGINE_TEST_DB_NAME",
+                "PROGRESSENGINE_TEST_DB_USER",
+                "PROGRESSENGINE_TEST_DB_PASSWORD"
+            )
+            val missing = names.filter { System.getenv(it).isNullOrBlank() }
+            if (missing.isNotEmpty()) {
+                throw GradleException("Missing ProgressEngine integration test variables: ${missing.joinToString()}")
+            }
+        }
     }
 }
