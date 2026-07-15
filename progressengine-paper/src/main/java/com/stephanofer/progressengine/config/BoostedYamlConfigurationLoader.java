@@ -27,6 +27,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.time.Clock;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -45,10 +46,12 @@ import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
 public final class BoostedYamlConfigurationLoader implements ConfigurationLoader {
     private static final String CONFIG_FILE_NAME = "config.yml";
     private static final String IDENTITY_FILE_NAME = "identity.yml";
+    private static final String COMMANDS_FILE_NAME = "commands.yml";
     private static final String ES_MESSAGES_FILE_NAME = "messages/es.yml";
     private static final String EN_MESSAGES_FILE_NAME = "messages/en.yml";
     private static final int CONFIG_VERSION = 1;
     private static final int IDENTITY_VERSION = 1;
+    private static final int COMMANDS_VERSION = 1;
     private static final int MESSAGES_VERSION = 1;
     private static final Pattern REDIS_COMPONENT = Pattern.compile("[a-zA-Z0-9._:-]+");
     private static final Pattern TABLE_PREFIX = Pattern.compile("[a-zA-Z0-9_]*");
@@ -66,25 +69,42 @@ public final class BoostedYamlConfigurationLoader implements ConfigurationLoader
         "command-no-permission",
         "command-player-only",
         "command-console-only",
+        "command-player-or-console-only",
+        "command-disabled",
         "invalid-amount",
+        "invalid-page",
+        "invalid-reason",
         "unknown-target",
+        "target-self",
         "balance-self",
         "balance-other",
+        "pay-range",
         "pay-confirm-required",
+        "pay-retry-available",
+        "pay-token-invalid",
+        "pay-token-expired",
+        "pay-token-stale",
         "pay-success-sender",
         "pay-success-receiver",
         "pay-insufficient-funds",
+        "pay-balance-limit",
         "pay-cooldown",
         "history-empty",
         "history-header",
         "history-entry",
+        "history-session-expired",
+        "history-next-page",
+        "history-previous-page",
         "admin-add-success",
         "admin-remove-success",
         "admin-set-success",
         "admin-reset-success",
+        "admin-retry-available",
         "admin-reload-success",
+        "admin-reload-restart-required",
         "admin-reload-failure",
         "admin-status-header",
+        "admin-status-line",
         "infrastructure-unavailable"
     );
     private static final Set<String> FEEDBACK_KEYS = Set.of("award-received", "transfer-received");
@@ -93,25 +113,42 @@ public final class BoostedYamlConfigurationLoader implements ConfigurationLoader
         Map.entry("command-no-permission", Set.of()),
         Map.entry("command-player-only", Set.of()),
         Map.entry("command-console-only", Set.of()),
+        Map.entry("command-player-or-console-only", Set.of()),
+        Map.entry("command-disabled", Set.of("command")),
         Map.entry("invalid-amount", Set.of("input")),
+        Map.entry("invalid-page", Set.of("input")),
+        Map.entry("invalid-reason", Set.of("input")),
         Map.entry("unknown-target", Set.of("target")),
+        Map.entry("target-self", Set.of()),
         Map.entry("balance-self", Set.of("balance", "balance_raw", "balance_compact")),
         Map.entry("balance-other", Set.of("target", "balance", "balance_raw", "balance_compact")),
+        Map.entry("pay-range", Set.of("minimum", "maximum")),
         Map.entry("pay-confirm-required", Set.of("amount", "target", "token")),
+        Map.entry("pay-retry-available", Set.of("token")),
+        Map.entry("pay-token-invalid", Set.of("token")),
+        Map.entry("pay-token-expired", Set.of("token")),
+        Map.entry("pay-token-stale", Set.of()),
         Map.entry("pay-success-sender", Set.of("amount", "target", "balance")),
         Map.entry("pay-success-receiver", Set.of("amount", "sender", "balance")),
         Map.entry("pay-insufficient-funds", Set.of("amount", "balance")),
+        Map.entry("pay-balance-limit", Set.of("target", "amount")),
         Map.entry("pay-cooldown", Set.of("seconds")),
         Map.entry("history-empty", Set.of()),
         Map.entry("history-header", Set.of("page")),
-        Map.entry("history-entry", Set.of("actor", "target", "amount", "balance", "reason", "date")),
+        Map.entry("history-entry", Set.of("operation", "actor", "target", "amount", "balance", "reason", "date", "type")),
+        Map.entry("history-session-expired", Set.of()),
+        Map.entry("history-next-page", Set.of("page")),
+        Map.entry("history-previous-page", Set.of("page")),
         Map.entry("admin-add-success", Set.of("amount", "target", "balance")),
         Map.entry("admin-remove-success", Set.of("amount", "target", "balance")),
         Map.entry("admin-set-success", Set.of("amount", "target", "balance")),
         Map.entry("admin-reset-success", Set.of("target", "balance")),
-        Map.entry("admin-reload-success", Set.of("revision")),
+        Map.entry("admin-retry-available", Set.of("token")),
+        Map.entry("admin-reload-success", Set.of("revision", "applied")),
+        Map.entry("admin-reload-restart-required", Set.of("changes")),
         Map.entry("admin-reload-failure", Set.of("problems")),
         Map.entry("admin-status-header", Set.of("state")),
+        Map.entry("admin-status-line", Set.of("label", "value")),
         Map.entry("infrastructure-unavailable", Set.of()),
         Map.entry("award-received", Set.of("amount", "amount_raw", "amount_compact", "balance", "balance_raw", "balance_compact")),
         Map.entry("transfer-received", Set.of("amount", "amount_raw", "amount_compact", "sender", "balance", "balance_raw", "balance_compact"))
@@ -203,6 +240,7 @@ public final class BoostedYamlConfigurationLoader implements ConfigurationLoader
         ProgressEngineConfig config = readConfig(yaml, problems);
         LocalizationSettings localization = readLocalization(yaml, problems);
         LoadedIdentity loadedIdentity = loadIdentity(problems);
+        LoadedCommands loadedCommands = loadCommands(config, problems);
         LoadedMessages loadedMessages = loadMessages(localization, problems);
         if (!problems.isEmpty()) {
             throw new ConfigurationLoadException(problems);
@@ -213,11 +251,13 @@ public final class BoostedYamlConfigurationLoader implements ConfigurationLoader
             config,
             localization,
             loadedIdentity.settings(),
-            loadedMessages.catalogs()
+            loadedMessages.catalogs(),
+            loadedCommands.settings()
         );
         Map<String, String> serialized = new LinkedHashMap<>();
         serialized.put(CONFIG_FILE_NAME, yaml.dump());
         serialized.put(IDENTITY_FILE_NAME, loadedIdentity.serialized());
+        serialized.put(COMMANDS_FILE_NAME, loadedCommands.serialized());
         serialized.put(ES_MESSAGES_FILE_NAME, loadedMessages.serializedEs());
         serialized.put(EN_MESSAGES_FILE_NAME, loadedMessages.serializedEn());
         return new LoadedConfiguration(snapshot, serialized);
@@ -543,6 +583,137 @@ public final class BoostedYamlConfigurationLoader implements ConfigurationLoader
         return new LoadedMessages(new MessageCatalogs(catalogs), es.serialized(), en.serialized());
     }
 
+    private LoadedCommands loadCommands(ProgressEngineConfig config, List<ConfigurationProblem> problems) throws ConfigurationLoadException {
+        byte[] defaults = readDefaults(COMMANDS_FILE_NAME);
+        byte[] document = readDocument(COMMANDS_FILE_NAME, defaults);
+        YamlDocument yaml = loadYaml(COMMANDS_FILE_NAME, document, defaults, COMMANDS_VERSION);
+        validateCommandRoutes(yaml, problems);
+        CommandSettings settings = readCommands(config, yaml, problems);
+        return new LoadedCommands(settings, yaml.dump());
+    }
+
+    private void validateCommandRoutes(YamlDocument yaml, List<ConfigurationProblem> problems) {
+        Set<String> allowedTop = Set.of("config-version", "registration", "availability", "permissions", "pay", "history", "suggestions", "reasons");
+        Set<String> allowedStatic = Set.of(
+            "registration.root", "registration.aliases",
+            "pay.minimum", "pay.maximum", "pay.cooldown-seconds", "pay.confirmation", "pay.confirmation.enabled",
+            "pay.confirmation.threshold", "pay.confirmation.expiry-seconds", "pay.retry-retention-seconds",
+            "history.page-size", "history.session-expiry-seconds", "history.time-zone",
+            "suggestions.maximum-size", "suggestions.refresh-seconds",
+            "reasons.player-transfer", "reasons.admin-add", "reasons.admin-remove", "reasons.admin-set", "reasons.admin-reset"
+        );
+        for (String route : yaml.getRoutesAsStrings(true)) {
+            if (allowedTop.contains(route) || allowedStatic.contains(route)) continue;
+            if (route.startsWith("availability.")) {
+                try {
+                    CommandSettings.CommandFeature.fromConfigKey(route.substring("availability.".length()));
+                    continue;
+                } catch (IllegalArgumentException ignored) {
+                }
+            }
+            if (route.startsWith("permissions.")) {
+                try {
+                    CommandSettings.CommandPermission.fromConfigKey(route.substring("permissions.".length()));
+                    continue;
+                } catch (IllegalArgumentException ignored) {
+                }
+            }
+            problems.add(new ConfigurationProblem(COMMANDS_FILE_NAME + ':' + route, "unknown configuration key"));
+        }
+    }
+
+    private CommandSettings readCommands(ProgressEngineConfig config, YamlDocument yaml, List<ConfigurationProblem> problems) {
+        Reader reader = new Reader(yaml, problems, COMMANDS_FILE_NAME + ':');
+        int version = reader.intRange("config-version", COMMANDS_VERSION, COMMANDS_VERSION, COMMANDS_VERSION);
+        if (version != COMMANDS_VERSION) {
+            problems.add(new ConfigurationProblem(COMMANDS_FILE_NAME + ":config-version", "unsupported version"));
+        }
+        reader.requireSection("registration");
+        reader.requireSection("availability");
+        reader.requireSection("permissions");
+        reader.requireSection("pay");
+        reader.requireSection("pay.confirmation");
+        reader.requireSection("history");
+        reader.requireSection("suggestions");
+        reader.requireSection("reasons");
+
+        CommandSettings defaults = CommandSettings.defaults();
+        String root = reader.commandLabel("registration.root", defaults.registration().root());
+        List<String> aliases = readCommandAliases(yaml, problems);
+
+        java.util.EnumMap<CommandSettings.CommandFeature, Boolean> availability = new java.util.EnumMap<>(CommandSettings.CommandFeature.class);
+        for (CommandSettings.CommandFeature feature : CommandSettings.CommandFeature.values()) {
+            availability.put(feature, reader.bool("availability." + feature.configKey(), true));
+        }
+
+        java.util.EnumMap<CommandSettings.CommandPermission, String> permissions = new java.util.EnumMap<>(CommandSettings.CommandPermission.class);
+        for (CommandSettings.CommandPermission permission : CommandSettings.CommandPermission.values()) {
+            permissions.put(permission, reader.permission("permissions." + permission.configKey(), defaults.permissions().require(permission)));
+        }
+
+        long minimum = reader.longRange("pay.minimum", 1L, Long.MAX_VALUE, defaults.pay().minimum());
+        long maximum = reader.longRange("pay.maximum", 1L, Long.MAX_VALUE, defaults.pay().maximum());
+        long cooldown = reader.longRange("pay.cooldown-seconds", 0L, 86_400L, defaults.pay().cooldownSeconds());
+        boolean confirmationEnabled = reader.bool("pay.confirmation.enabled", true);
+        long threshold = reader.longRange("pay.confirmation.threshold", 1L, Long.MAX_VALUE, defaults.pay().confirmation().threshold());
+        long expiry = reader.longRange("pay.confirmation.expiry-seconds", 5L, 3_600L, defaults.pay().confirmation().expirySeconds());
+        long retention = reader.longRange("pay.retry-retention-seconds", 60L, 604_800L, defaults.pay().retryRetentionSeconds());
+
+        if (maximum > config.economy().maximumBalance()) {
+            problems.add(new ConfigurationProblem(COMMANDS_FILE_NAME + ":pay.maximum", "must not exceed economy.maximum-balance"));
+        }
+        if (threshold > config.economy().maximumBalance()) {
+            problems.add(new ConfigurationProblem(COMMANDS_FILE_NAME + ":pay.confirmation.threshold", "must not exceed economy.maximum-balance"));
+        }
+
+        int pageSize = reader.intRange("history.page-size", 1, 100, defaults.history().pageSize());
+        long sessionExpiry = reader.longRange("history.session-expiry-seconds", 10L, 3_600L, defaults.history().sessionExpirySeconds());
+        ZoneId timeZone = reader.timeZone("history.time-zone", defaults.history().timeZone());
+        int suggestionsSize = reader.intRange("suggestions.maximum-size", 1, 10_000, defaults.suggestions().maximumSize());
+        long suggestionsRefresh = reader.longRange("suggestions.refresh-seconds", 30L, 86_400L, defaults.suggestions().refreshSeconds());
+
+        try {
+            return new CommandSettings(
+                new CommandSettings.Registration(root, aliases),
+                new CommandSettings.Availability(availability),
+                new CommandSettings.Permissions(permissions),
+                new CommandSettings.Pay(minimum, maximum, cooldown,
+                    new CommandSettings.Confirmation(confirmationEnabled, threshold, expiry), retention),
+                new CommandSettings.History(pageSize, sessionExpiry, timeZone),
+                new CommandSettings.Suggestions(suggestionsSize, suggestionsRefresh),
+                new CommandSettings.Reasons(
+                    reader.reason("reasons.player-transfer", defaults.reasons().playerTransfer()),
+                    reader.reason("reasons.admin-add", defaults.reasons().adminAdd()),
+                    reader.reason("reasons.admin-remove", defaults.reasons().adminRemove()),
+                    reader.reason("reasons.admin-set", defaults.reasons().adminSet()),
+                    reader.reason("reasons.admin-reset", defaults.reasons().adminReset())
+                )
+            );
+        } catch (IllegalArgumentException exception) {
+            problems.add(new ConfigurationProblem(COMMANDS_FILE_NAME, exception.getMessage()));
+            return defaults;
+        }
+    }
+
+    private List<String> readCommandAliases(YamlDocument yaml, List<ConfigurationProblem> problems) {
+        Object raw = yaml.get("registration.aliases", List.of());
+        if (!(raw instanceof List<?> list)) {
+            problems.add(new ConfigurationProblem(COMMANDS_FILE_NAME + ":registration.aliases", "must be a list"));
+            return List.of();
+        }
+        List<String> aliases = new ArrayList<>();
+        Reader reader = new Reader(yaml, problems, COMMANDS_FILE_NAME + ':');
+        for (int index = 0; index < list.size(); index++) {
+            Object value = list.get(index);
+            if (!(value instanceof String text)) {
+                problems.add(new ConfigurationProblem(COMMANDS_FILE_NAME + ":registration.aliases[" + index + ']', "must be a string"));
+                continue;
+            }
+            aliases.add(reader.validateCommandLabel("registration.aliases[" + index + ']', text, ""));
+        }
+        return aliases;
+    }
+
     private LoadedCatalog loadCatalog(String language, String fileName, List<ConfigurationProblem> problems) throws ConfigurationLoadException {
         byte[] defaults = readDefaults(fileName);
         byte[] document = readDocument(fileName, defaults);
@@ -858,6 +1029,9 @@ public final class BoostedYamlConfigurationLoader implements ConfigurationLoader
     private record LoadedIdentity(IdentitySettings settings, String serialized) {
     }
 
+    private record LoadedCommands(CommandSettings settings, String serialized) {
+    }
+
     private record LoadedCatalog(MessageCatalog catalog, String serialized) {
     }
 
@@ -867,37 +1041,47 @@ public final class BoostedYamlConfigurationLoader implements ConfigurationLoader
     private static final class Reader {
         private final YamlDocument yaml;
         private final List<ConfigurationProblem> problems;
+        private final String pathPrefix;
 
         private Reader(YamlDocument yaml, List<ConfigurationProblem> problems) {
+            this(yaml, problems, "");
+        }
+
+        private Reader(YamlDocument yaml, List<ConfigurationProblem> problems, String pathPrefix) {
             this.yaml = yaml;
             this.problems = problems;
+            this.pathPrefix = pathPrefix;
+        }
+
+        private ConfigurationProblem problem(String path, String message) {
+            return new ConfigurationProblem(this.pathPrefix + path, message);
         }
 
         private void requireVersion() {
             int version = intRange("config-version", CONFIG_VERSION, CONFIG_VERSION, CONFIG_VERSION);
             if (version != CONFIG_VERSION) {
-                this.problems.add(new ConfigurationProblem("config-version", "unsupported version"));
+                this.problems.add(problem("config-version", "unsupported version"));
             }
         }
 
         private void requireSection(String path) {
             Object value = this.yaml.get(path, null);
             if (!(value instanceof Section)) {
-                this.problems.add(new ConfigurationProblem(path, "must be a section"));
+                this.problems.add(problem(path, "must be a section"));
             }
         }
 
         private String text(String path, String fallback, boolean allowEmpty, boolean allowWhitespace) {
             Object value = this.yaml.get(path, null);
             if (!(value instanceof String text)) {
-                this.problems.add(new ConfigurationProblem(path, "must be a string"));
+                this.problems.add(problem(path, "must be a string"));
                 return fallback;
             }
             if (!allowWhitespace && !text.equals(text.trim())) {
-                this.problems.add(new ConfigurationProblem(path, "must not contain leading or trailing whitespace"));
+                this.problems.add(problem(path, "must not contain leading or trailing whitespace"));
             }
             if (!allowEmpty && text.isBlank()) {
-                this.problems.add(new ConfigurationProblem(path, "must not be empty"));
+                this.problems.add(problem(path, "must not be empty"));
                 return fallback;
             }
             return text;
@@ -906,11 +1090,11 @@ public final class BoostedYamlConfigurationLoader implements ConfigurationLoader
         private String component(String path, String fallback, boolean allowDefaultUnknown) {
             String value = text(path, fallback, false, false);
             if (!REDIS_COMPONENT.matcher(value).matches() || value.length() > 256) {
-                this.problems.add(new ConfigurationProblem(path, "must match [a-zA-Z0-9._:-]+ and be at most 256 characters"));
+                this.problems.add(problem(path, "must match [a-zA-Z0-9._:-]+ and be at most 256 characters"));
                 return fallback;
             }
             if (!allowDefaultUnknown && value.equals("unknown")) {
-                this.problems.add(new ConfigurationProblem(path, "must not use the reserved value \"unknown\""));
+                this.problems.add(problem(path, "must not use the reserved value \"unknown\""));
                 return fallback;
             }
             return value;
@@ -919,7 +1103,7 @@ public final class BoostedYamlConfigurationLoader implements ConfigurationLoader
         private String tablePrefix(String path, String fallback) {
             String value = text(path, fallback, true, false);
             if (!TABLE_PREFIX.matcher(value).matches()) {
-                this.problems.add(new ConfigurationProblem(path, "must contain only letters, numbers or underscores"));
+                this.problems.add(problem(path, "must contain only letters, numbers or underscores"));
                 return fallback;
             }
             return value;
@@ -930,7 +1114,7 @@ public final class BoostedYamlConfigurationLoader implements ConfigurationLoader
             try {
                 return AwardRounding.valueOf(value);
             } catch (IllegalArgumentException exception) {
-                this.problems.add(new ConfigurationProblem(path, "must be FLOOR"));
+                this.problems.add(problem(path, "must be FLOOR"));
                 return fallback;
             }
         }
@@ -938,7 +1122,7 @@ public final class BoostedYamlConfigurationLoader implements ConfigurationLoader
         private String language(String path, String fallback) {
             String value = text(path, fallback, false, false).trim().toLowerCase(java.util.Locale.ROOT);
             if (!value.equals("es") && !value.equals("en")) {
-                this.problems.add(new ConfigurationProblem(path, "must be es or en"));
+                this.problems.add(problem(path, "must be es or en"));
                 return fallback;
             }
             return value;
@@ -947,7 +1131,7 @@ public final class BoostedYamlConfigurationLoader implements ConfigurationLoader
         private boolean bool(String path, boolean fallback) {
             Object value = this.yaml.get(path, null);
             if (!(value instanceof Boolean bool)) {
-                this.problems.add(new ConfigurationProblem(path, "must be a boolean"));
+                this.problems.add(problem(path, "must be a boolean"));
                 return fallback;
             }
             return bool;
@@ -959,7 +1143,7 @@ public final class BoostedYamlConfigurationLoader implements ConfigurationLoader
                 return fallback;
             }
             if (value.compareTo(BigInteger.valueOf(min)) < 0 || value.compareTo(BigInteger.valueOf(max)) > 0) {
-                this.problems.add(new ConfigurationProblem(path, "must be between " + min + " and " + max));
+                this.problems.add(problem(path, "must be between " + min + " and " + max));
                 return fallback;
             }
             return value.intValue();
@@ -971,7 +1155,7 @@ public final class BoostedYamlConfigurationLoader implements ConfigurationLoader
                 return fallback;
             }
             if (value.compareTo(BigInteger.valueOf(min)) < 0 || value.compareTo(BigInteger.valueOf(max)) > 0) {
-                this.problems.add(new ConfigurationProblem(path, "must be between " + min + " and " + max));
+                this.problems.add(problem(path, "must be between " + min + " and " + max));
                 return fallback;
             }
             return value.longValue();
@@ -986,7 +1170,7 @@ public final class BoostedYamlConfigurationLoader implements ConfigurationLoader
                 return 0L;
             }
             if (value.compareTo(BigInteger.valueOf(minNonZero)) < 0 || value.compareTo(BigInteger.valueOf(max)) > 0) {
-                this.problems.add(new ConfigurationProblem(path, "must be 0 or between " + minNonZero + " and " + max));
+                this.problems.add(problem(path, "must be 0 or between " + minNonZero + " and " + max));
                 return fallback;
             }
             return value.longValue();
@@ -1000,8 +1184,50 @@ public final class BoostedYamlConfigurationLoader implements ConfigurationLoader
             if (value instanceof BigInteger bigInteger) {
                 return bigInteger;
             }
-            this.problems.add(new ConfigurationProblem(path, "must be an integer"));
+            this.problems.add(problem(path, "must be an integer"));
             return null;
+        }
+
+        private String commandLabel(String path, String fallback) {
+            return validateCommandLabel(path, text(path, fallback, false, false), fallback);
+        }
+
+        private String validateCommandLabel(String path, String value, String fallback) {
+            if (!value.matches("[a-z][a-z0-9_-]{0,31}")) {
+                this.problems.add(problem(path, "must match [a-z][a-z0-9_-]{0,31}"));
+                return fallback;
+            }
+            return value;
+        }
+
+        private String permission(String path, String fallback) {
+            String value = text(path, fallback, false, false);
+            if (!value.matches("[a-z0-9._-]+(\\.[a-z0-9._-]+)*") || value.length() > 128) {
+                this.problems.add(problem(path, "must be a valid permission node"));
+                return fallback;
+            }
+            return value;
+        }
+
+        private com.stephanofer.progressengine.api.operation.OperationReason reason(String path,
+                                                                                    com.stephanofer.progressengine.api.operation.OperationReason fallback) {
+            String value = text(path, fallback.value(), false, false);
+            try {
+                return com.stephanofer.progressengine.api.operation.OperationReason.of(value);
+            } catch (IllegalArgumentException exception) {
+                this.problems.add(problem(path, exception.getMessage()));
+                return fallback;
+            }
+        }
+
+        private ZoneId timeZone(String path, ZoneId fallback) {
+            String value = text(path, fallback.getId(), false, false);
+            try {
+                return ZoneId.of(value);
+            } catch (RuntimeException exception) {
+                this.problems.add(problem(path, "must be a valid time zone"));
+                return fallback;
+            }
         }
     }
 }

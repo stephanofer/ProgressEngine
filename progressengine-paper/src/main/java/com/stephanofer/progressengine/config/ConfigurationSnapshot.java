@@ -4,8 +4,8 @@ import java.time.Instant;
 import java.util.Objects;
 
 public record ConfigurationSnapshot(long revision, Instant loadedAt, ProgressEngineConfig config,
-                                    LocalizationSettings localization, IdentitySettings identity,
-                                    MessageCatalogs messages) {
+                                     LocalizationSettings localization, IdentitySettings identity,
+                                     MessageCatalogs messages, CommandSettings commands) {
     public ConfigurationSnapshot {
         if (revision < 1L) {
             throw new IllegalArgumentException("revision must be positive");
@@ -15,6 +15,7 @@ public record ConfigurationSnapshot(long revision, Instant loadedAt, ProgressEng
         Objects.requireNonNull(localization, "localization");
         Objects.requireNonNull(identity, "identity");
         Objects.requireNonNull(messages, "messages");
+        Objects.requireNonNull(commands, "commands");
     }
 
     public ConfigurationSnapshot(long revision, Instant loadedAt, ProgressEngineConfig config) {
@@ -32,7 +33,8 @@ public record ConfigurationSnapshot(long revision, Instant loadedAt, ProgressEng
             new MessageCatalogs(java.util.Map.of(
                 "en", new MessageCatalog("en", defaultNumberFormat(), java.util.Map.of(), java.util.Map.of()),
                 "es", new MessageCatalog("es", defaultNumberFormat(), java.util.Map.of(), java.util.Map.of())
-            ))
+            )),
+            CommandSettings.defaults()
         );
     }
 

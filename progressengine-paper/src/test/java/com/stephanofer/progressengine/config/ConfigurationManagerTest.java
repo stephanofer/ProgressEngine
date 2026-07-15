@@ -36,6 +36,22 @@ final class ConfigurationManagerTest {
     }
 
     @Test
+    void reloadReportsRestartRequiredForServerIdAndPublishesEffectivePreviousValue() {
+        QueueLoader loader = new QueueLoader();
+        loader.success(snapshot(1L));
+        loader.success(snapshot(2L));
+        ConfigurationManager manager = new ConfigurationManager(loader, Runnable::run);
+
+        ConfigurationReloadResult first = manager.reloadAsync().join();
+        ConfigurationReloadResult second = manager.reloadAsync().join();
+
+        assertTrue(first.success());
+        assertTrue(second.success());
+        assertEquals("server-1", second.activeSnapshot().orElseThrow().config().serverId());
+        assertTrue(second.changes().restartRequired().contains("server-id"));
+    }
+
+    @Test
     void concurrentReloadsShareTheSameFuture() throws Exception {
         BlockingLoader loader = new BlockingLoader();
         ExecutorService executor = Executors.newSingleThreadExecutor();

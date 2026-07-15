@@ -10,9 +10,10 @@ public final class DatabaseTables {
     public static final String OPERATIONS = "progress_operations";
     public static final String LEDGER = "progress_ledger";
     public static final String PLAYER_NAMES = "progress_player_names";
+    public static final String COMMAND_INTENTS = "progress_command_intents";
     public static final String FLYWAY_HISTORY = "flyway_schema_history";
     private static final int MYSQL_IDENTIFIER_LIMIT = 64;
-    private static final List<String> ALL = List.of(ACCOUNTS, OPERATIONS, LEDGER, PLAYER_NAMES, FLYWAY_HISTORY);
+    private static final List<String> ALL = List.of(ACCOUNTS, OPERATIONS, LEDGER, PLAYER_NAMES, COMMAND_INTENTS, FLYWAY_HISTORY);
 
     private final Database database;
 
@@ -35,6 +36,14 @@ public final class DatabaseTables {
 
     public String playerNames() {
         return this.database.table(PLAYER_NAMES);
+    }
+
+    public String commandIntents() {
+        return this.database.table(COMMAND_INTENTS);
+    }
+
+    public String flywayHistory() {
+        return this.database.table(FLYWAY_HISTORY);
     }
 
     public static void validatePrefix(String tablePrefix) {

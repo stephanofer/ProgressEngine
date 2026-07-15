@@ -15,7 +15,7 @@ public final class ProgressEngine extends JavaPlugin {
     @Override
     public void onEnable() {
         this.commandManager.onEnable();
-        this.runtime = ProgressEngineRuntime.create(this);
+        this.runtime = ProgressEngineRuntime.create(this, this.commandManager);
         this.runtime.start();
     }
 

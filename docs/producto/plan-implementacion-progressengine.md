@@ -378,7 +378,6 @@ Se aplican estas reglas durante todo el plan:
 
 **Constancia de cierre:** [x] Terminado | Fecha: 7/15/26 | 
 
-## Bloque 10: Redis y convergencia entre servidores
 
 **Objetivo:** propagar cambios rápidamente y garantizar convergencia aun cuando Pub/Sub pierda mensajes.
 
@@ -444,13 +443,13 @@ Se aplican estas reglas durante todo el plan:
 
 **El bloque se considera terminado cuando:**
 
-- [ ] Todos los comandos definidos por el diseño existen y respetan permisos.
-- [ ] Ningún handler usa `.join()`, `.get()` o I/O bloqueante en el main thread.
-- [ ] Pay solo comunica éxito después del commit.
-- [ ] Tokens vencidos, usados o ligados a otra revisión no autorizan pagos.
-- [ ] History pagina y status diferencia salud de MySQL y Redis.
+- [x] Todos los comandos definidos por el diseño existen y respetan permisos.
+- [x] Ningún handler usa `.join()`, `.get()` o I/O bloqueante en el main thread.
+- [x] Pay solo comunica éxito después del commit.
+- [x] Tokens vencidos, usados o ligados a otra revisión no autorizan pagos.
+- [x] History pagina y status diferencia salud de MySQL y Redis.
 
-**Constancia de cierre:** [ ] Terminado | Fecha: __________ | 
+**Constancia de cierre:** [x] Terminado | Fecha: 7/15.26 |
 
 ## Bloque 12: PlaceholderAPI
 

@@ -1,0 +1,59 @@
+# ProgressEngine command configuration.
+config-version: 1
+
+registration:
+  root: "points"
+  aliases: []
+
+availability:
+  balance: true
+  pay: true
+  history: true
+  help: true
+  admin-add: true
+  admin-remove: true
+  admin-set: true
+  admin-reset: true
+  admin-history: true
+  admin-reload: true
+  admin-status: true
+
+permissions:
+  balance: "progressengine.command.balance"
+  balance-others: "progressengine.command.balance.others"
+  pay: "progressengine.command.pay"
+  history: "progressengine.command.history"
+  help: "progressengine.command.help"
+  admin-add: "progressengine.command.admin.add"
+  admin-remove: "progressengine.command.admin.remove"
+  admin-set: "progressengine.command.admin.set"
+  admin-reset: "progressengine.command.admin.reset"
+  admin-history: "progressengine.command.admin.history"
+  admin-reload: "progressengine.command.admin.reload"
+  admin-status: "progressengine.command.admin.status"
+
+pay:
+  minimum: 1
+  maximum: 1000000000
+  cooldown-seconds: 5
+  confirmation:
+    enabled: true
+    threshold: 100000
+    expiry-seconds: 30
+  retry-retention-seconds: 86400
+
+history:
+  page-size: 10
+  session-expiry-seconds: 120
+  time-zone: "UTC"
+
+suggestions:
+  maximum-size: 10000
+  refresh-seconds: 300
+
+reasons:
+  player-transfer: "progressengine:player_transfer"
+  admin-add: "progressengine:admin_add"
+  admin-remove: "progressengine:admin_remove"
+  admin-set: "progressengine:admin_set"
+  admin-reset: "progressengine:admin_reset"

@@ -8,6 +8,7 @@ import org.incendo.cloud.execution.ExecutionCoordinator;
 import org.incendo.cloud.paper.PaperCommandManager;
 import org.incendo.cloud.paper.util.sender.PaperSimpleSenderMapper;
 import org.incendo.cloud.paper.util.sender.Source;
+import org.incendo.cloud.setting.ManagerSetting;
 
 @SuppressWarnings("UnstableApiUsage")
 public final class ProgressEngineBootstrap implements PluginBootstrap {
@@ -18,6 +19,7 @@ public final class ProgressEngineBootstrap implements PluginBootstrap {
         this.commandManager = PaperCommandManager.builder(PaperSimpleSenderMapper.simpleSenderMapper())
             .executionCoordinator(ExecutionCoordinator.simpleCoordinator())
             .buildBootstrapped(context);
+        this.commandManager.settings().set(ManagerSetting.ALLOW_UNSAFE_REGISTRATION, true);
     }
 
     @Override

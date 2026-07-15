@@ -13,6 +13,7 @@ import com.stephanofer.progressengine.award.AwardCoordinator;
 import com.stephanofer.progressengine.award.BukkitAwardPrepareEventDispatcher;
 import com.stephanofer.progressengine.booster.NetworkBoostersIntegration;
 import com.stephanofer.progressengine.booster.NetworkBoostersIntegrationFactory;
+import com.stephanofer.progressengine.command.PointsCommands;
 import com.stephanofer.progressengine.config.BoostedYamlConfigurationLoader;
 import com.stephanofer.progressengine.config.ConfigurationManager;
 import com.stephanofer.progressengine.config.ConfigurationProblem;
@@ -55,9 +56,12 @@ import org.bukkit.event.HandlerList;
 import org.bukkit.plugin.RegisteredServiceProvider;
 import org.bukkit.plugin.java.JavaPlugin;
 import net.luckperms.api.LuckPerms;
+import org.incendo.cloud.paper.PaperCommandManager;
+import org.incendo.cloud.paper.util.sender.Source;
 
 public final class ProgressEngineRuntime implements AutoCloseable {
     private final JavaPlugin plugin;
+    private final PaperCommandManager.Bootstrapped<Source> commandManager;
     private final RuntimeLifecycle lifecycle;
     private final InFlightTracker inFlightTracker;
     private final LifecycleResources resources;
@@ -72,15 +76,18 @@ public final class ProgressEngineRuntime implements AutoCloseable {
     private final AtomicReference<PlayerIdentityRenderer> identityRenderer = new AtomicReference<>();
     private final AtomicReference<FeedbackService> feedbackService = new AtomicReference<>();
     private final AtomicReference<RedisSyncCoordinator> redisSync = new AtomicReference<>();
+    private final AtomicReference<PointsCommands> commands = new AtomicReference<>();
 
     private ProgressEngineRuntime(
         JavaPlugin plugin,
+        PaperCommandManager.Bootstrapped<Source> commandManager,
         RuntimeLifecycle lifecycle,
         InFlightTracker inFlightTracker,
         LifecycleResources resources,
         ConfigurationManager configurationManager
     ) {
         this.plugin = Objects.requireNonNull(plugin, "plugin");
+        this.commandManager = Objects.requireNonNull(commandManager, "commandManager");
         this.lifecycle = Objects.requireNonNull(lifecycle, "lifecycle");
         this.inFlightTracker = Objects.requireNonNull(inFlightTracker, "inFlightTracker");
         this.resources = Objects.requireNonNull(resources, "resources");
@@ -88,8 +95,9 @@ public final class ProgressEngineRuntime implements AutoCloseable {
         this.resources.register("configuration-manager", this.configurationManager);
     }
 
-    public static ProgressEngineRuntime create(JavaPlugin plugin) {
+    public static ProgressEngineRuntime create(JavaPlugin plugin, PaperCommandManager.Bootstrapped<Source> commandManager) {
         Objects.requireNonNull(plugin, "plugin");
+        Objects.requireNonNull(commandManager, "commandManager");
         RuntimeLifecycle lifecycle = new RuntimeLifecycle();
         InFlightTracker inFlightTracker = new InFlightTracker(lifecycle);
         LifecycleResources resources = new LifecycleResources();
@@ -98,7 +106,7 @@ public final class ProgressEngineRuntime implements AutoCloseable {
             new BoostedYamlConfigurationLoader(plugin.getDataFolder().toPath(), plugin::getResource, Clock.systemUTC()),
             asyncExecutor
         );
-        return new ProgressEngineRuntime(plugin, lifecycle, inFlightTracker, resources, configurationManager);
+        return new ProgressEngineRuntime(plugin, commandManager, lifecycle, inFlightTracker, resources, configurationManager);
     }
 
     public RuntimeState state() {
@@ -481,7 +489,30 @@ public final class ProgressEngineRuntime implements AutoCloseable {
         this.resources.register("player-lifecycle-listener", () -> HandlerList.unregisterAll(listener));
         processAlreadyOnlinePlayers(playerSettings, lifecycleCoordinator);
         redisCoordinator.activate();
-        this.plugin.getLogger().info("ProgressEngine economic runtime initialized. Public service remains hidden until later blocks are complete.");
+        PointsCommands commands = new PointsCommands(
+            this.plugin,
+            this.commandManager,
+            service.client(this.plugin),
+            persistence,
+            this.configurationManager,
+            store,
+            this.inFlightTracker,
+            this.lifecycle::state,
+            this::activeSnapshot,
+            () -> java.util.Optional.ofNullable(this.redisSync.get()).map(RedisSyncCoordinator::status),
+            localizedMessages,
+            identityRenderer,
+            feedbackService,
+            this.plugin.getLogger(),
+            Clock.systemUTC()
+        );
+        commands.register();
+        if (!this.commands.compareAndSet(null, commands)) {
+            commands.close();
+            throw new IllegalStateException("ProgressEngine commands were already initialized");
+        }
+        this.resources.register("commands", commands);
+        this.plugin.getLogger().info("ProgressEngine economic runtime initialized with commands. Public service remains hidden until later blocks are complete.");
     }
 
     private PlayerSettingsService resolvePlayerSettingsService() {

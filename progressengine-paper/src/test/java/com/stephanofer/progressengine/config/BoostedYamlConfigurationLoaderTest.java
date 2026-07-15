@@ -36,6 +36,7 @@ final class BoostedYamlConfigurationLoaderTest {
         assertTrue(loaded.snapshot().messages().require("en").messages().containsKey("points-loading"));
         assertTrue(Files.exists(this.directory.resolve("config.yml")));
         assertTrue(Files.exists(this.directory.resolve("identity.yml")));
+        assertTrue(Files.exists(this.directory.resolve("commands.yml")));
         assertTrue(Files.exists(this.directory.resolve("messages/es.yml")));
         assertTrue(Files.exists(this.directory.resolve("messages/en.yml")));
         assertFalse(loaded.snapshot().config().database().toString().contains("password=\""));
@@ -102,6 +103,22 @@ final class BoostedYamlConfigurationLoaderTest {
         assertTrue(exception.problems().stream().anyMatch(problem -> problem.path().equals("database.pool.minimum-idle")));
         assertTrue(exception.problems().stream().anyMatch(problem -> problem.path().equals("database.pool.validation-timeout-millis")));
         assertTrue(exception.problems().stream().anyMatch(problem -> problem.path().equals("reconciliation.degraded-interval-seconds")));
+    }
+
+    @Test
+    void loadsCommandSettingsAndRejectsInvalidCommandRange() throws Exception {
+        BoostedYamlConfigurationLoader loader = loader();
+
+        LoadedConfiguration loaded = loader.load(1L);
+
+        assertEquals("points", loaded.snapshot().commands().registration().root());
+        assertEquals(1L, loaded.snapshot().commands().pay().minimum());
+
+        Files.writeString(this.directory.resolve("commands.yml"), defaultResource("commands.yml")
+            .replace("maximum: 1000000000", "maximum: 0"));
+
+        ConfigurationLoadException exception = assertThrows(ConfigurationLoadException.class, () -> loader().load(2L));
+        assertTrue(exception.problems().stream().anyMatch(problem -> problem.path().contains("commands.yml:pay.maximum")));
     }
 
     @Test

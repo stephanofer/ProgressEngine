@@ -11,6 +11,9 @@ public final class ProgressPersistence implements AutoCloseable {
     private final OperationRepository operations;
     private final LedgerRepository ledger;
     private final PlayerNameRepository playerNames;
+    private final CommandIntentRepository commandIntents;
+    private final HistoryQueryRepository history;
+    private final OperationalRepository operational;
 
     public ProgressPersistence(Database database) {
         this.database = Objects.requireNonNull(database, "database");
@@ -19,6 +22,9 @@ public final class ProgressPersistence implements AutoCloseable {
         this.operations = new OperationRepository(database, this.tables);
         this.ledger = new LedgerRepository(database, this.tables);
         this.playerNames = new PlayerNameRepository(database, this.tables, this.accounts);
+        this.commandIntents = new CommandIntentRepository(database, this.tables);
+        this.history = new HistoryQueryRepository(database, this.tables);
+        this.operational = new OperationalRepository(database, this.tables);
     }
 
     public CompletableFuture<Void> migrate() {
@@ -47,6 +53,18 @@ public final class ProgressPersistence implements AutoCloseable {
 
     public PlayerNameRepository playerNames() {
         return this.playerNames;
+    }
+
+    public CommandIntentRepository commandIntents() {
+        return this.commandIntents;
+    }
+
+    public HistoryQueryRepository history() {
+        return this.history;
+    }
+
+    public OperationalRepository operational() {
+        return this.operational;
     }
 
     @Override
