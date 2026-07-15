@@ -1,0 +1,23 @@
+CREATE TABLE `${tablePrefix}progress_ledger` (
+    `ledger_id` BIGINT NOT NULL AUTO_INCREMENT,
+    `operation_id` BINARY(16) NOT NULL,
+    `player_uuid` BINARY(16) NOT NULL,
+    `related_player_uuid` BINARY(16) NULL,
+    `delta` BIGINT NOT NULL,
+    `balance_before` BIGINT NOT NULL,
+    `balance_after` BIGINT NOT NULL,
+    `revision` BIGINT NOT NULL,
+    `created_at` DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    PRIMARY KEY (`ledger_id`),
+    UNIQUE KEY `uk_progress_ledger_operation_player` (`operation_id`, `player_uuid`),
+    INDEX `idx_progress_ledger_player_history` (`player_uuid`, `created_at` DESC, `ledger_id` DESC),
+    FOREIGN KEY (`operation_id`) REFERENCES `${tablePrefix}progress_operations` (`operation_id`) ON UPDATE RESTRICT ON DELETE RESTRICT,
+    FOREIGN KEY (`player_uuid`) REFERENCES `${tablePrefix}progress_accounts` (`player_uuid`) ON UPDATE RESTRICT ON DELETE RESTRICT,
+    CHECK (`player_uuid` <> UNHEX('00000000000000000000000000000000')),
+    CHECK (`related_player_uuid` IS NULL OR `related_player_uuid` <> UNHEX('00000000000000000000000000000000')),
+    CHECK (`related_player_uuid` IS NULL OR `related_player_uuid` <> `player_uuid`),
+    CHECK (`balance_before` >= 0),
+    CHECK (`balance_after` >= 0),
+    CHECK (`revision` > 0),
+    CHECK (`delta` = `balance_after` - `balance_before`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;

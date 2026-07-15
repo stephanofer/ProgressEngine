@@ -4,16 +4,20 @@ import com.stephanofer.progressengine.config.BoostedYamlConfigurationLoader;
 import com.stephanofer.progressengine.config.ConfigurationManager;
 import com.stephanofer.progressengine.config.ConfigurationProblem;
 import com.stephanofer.progressengine.config.ConfigurationReloadResult;
+import com.stephanofer.progressengine.config.ConfigurationSnapshot;
 import com.stephanofer.progressengine.lifecycle.InFlightTracker;
 import com.stephanofer.progressengine.lifecycle.LifecycleResources;
 import com.stephanofer.progressengine.lifecycle.RuntimeLifecycle;
 import com.stephanofer.progressengine.lifecycle.RuntimeState;
+import com.stephanofer.progressengine.persistence.ProgressDatabaseFactory;
+import com.stephanofer.progressengine.persistence.ProgressPersistence;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.Objects;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Level;
 import org.bukkit.plugin.java.JavaPlugin;
 
@@ -24,6 +28,7 @@ public final class ProgressEngineRuntime implements AutoCloseable {
     private final LifecycleResources resources;
     private final ConfigurationManager configurationManager;
     private final AtomicBoolean shutdownStarted = new AtomicBoolean();
+    private final AtomicReference<ProgressPersistence> persistence = new AtomicReference<>();
 
     private ProgressEngineRuntime(
         JavaPlugin plugin,
@@ -80,8 +85,16 @@ public final class ProgressEngineRuntime implements AutoCloseable {
                 disableOnMainThread();
                 return;
             }
-            this.plugin.getLogger().info("ProgressEngine configuration loaded. Runtime remains STARTING until infrastructure is initialized.");
+            initializePersistence(result.activeSnapshot().orElseThrow());
         });
+    }
+
+    public ProgressPersistence persistence() {
+        ProgressPersistence value = this.persistence.get();
+        if (value == null) {
+            throw new IllegalStateException("ProgressEngine persistence is not initialized");
+        }
+        return value;
     }
 
     @Override
@@ -126,6 +139,48 @@ public final class ProgressEngineRuntime implements AutoCloseable {
     private void logProblems(ConfigurationReloadResult result) {
         for (ConfigurationProblem problem : result.problems()) {
             this.plugin.getLogger().severe("Invalid ProgressEngine configuration at " + problem.path() + ": " + problem.message());
+        }
+    }
+
+    private void initializePersistence(ConfigurationSnapshot snapshot) {
+        if (this.lifecycle.state() == RuntimeState.SHUTTING_DOWN || this.lifecycle.state() == RuntimeState.CLOSED) {
+            return;
+        }
+        ProgressPersistence created;
+        try {
+            created = ProgressDatabaseFactory.create(snapshot.config(), this.plugin.getClass().getClassLoader());
+            if (!this.persistence.compareAndSet(null, created)) {
+                created.close();
+                throw new IllegalStateException("ProgressEngine persistence was already initialized");
+            }
+            this.resources.register("persistence", created);
+        } catch (RuntimeException exception) {
+            this.plugin.getLogger().log(Level.SEVERE, "ProgressEngine failed to create persistence", exception);
+            transitionDatabaseUnavailable();
+            disableOnMainThread();
+            return;
+        }
+
+        created.migrate().whenComplete((ignored, failure) -> {
+            if (failure != null) {
+                this.plugin.getLogger().log(Level.SEVERE, "ProgressEngine failed to migrate database", unwrap(failure));
+                transitionDatabaseUnavailable();
+                try {
+                    created.close();
+                } catch (RuntimeException closeFailure) {
+                    this.plugin.getLogger().log(Level.SEVERE, "ProgressEngine failed to close persistence after migration failure", closeFailure);
+                }
+                disableOnMainThread();
+                return;
+            }
+            this.plugin.getLogger().info("ProgressEngine database migrated. Runtime remains STARTING until the economic service is fully connected.");
+        });
+    }
+
+    private void transitionDatabaseUnavailable() {
+        RuntimeState state = this.lifecycle.state();
+        if (state != RuntimeState.SHUTTING_DOWN && state != RuntimeState.CLOSED && state != RuntimeState.UNAVAILABLE_DATABASE) {
+            this.lifecycle.transitionTo(RuntimeState.UNAVAILABLE_DATABASE);
         }
     }
 

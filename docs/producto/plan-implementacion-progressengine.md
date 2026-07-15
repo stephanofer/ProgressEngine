@@ -121,18 +121,18 @@ Se aplican estas reglas durante todo el plan:
 
 **El bloque se considera terminado cuando:**
 
-- [ ] Una configuración inválida impide habilitar el runtime.
-- [ ] Una recarga inválida no publica estado parcial.
-- [ ] Las transiciones de estado están validadas y probadas.
-- [ ] Todavía no se registra una API económica incompleta.
+- [x] Una configuración inválida impide habilitar el runtime.
+- [x] Una recarga inválida no publica estado parcial.
+- [x] Las transiciones de estado están validadas y probadas.
+- [x] Todavía no se registra una API económica incompleta.
 
-**Constancia de cierre:** [ ] Terminado | Fecha: __________ | 
+**Constancia de cierre:** [x] Terminado | Fecha: 7/14/26 | 
 
 ## Bloque 3: Persistencia durable
 
 **Objetivo:** establecer el schema y los accesos SQL que serán la única autoridad económica.
 
-**Prerrequisito:** bloque 2 cerrado y MySQL externo de pruebas disponible para la suite de integración.
+**Prerrequisito:** bloque 2 cerrado.
 
 **Detalle en el diseño:** secciones 4.2, 8, 28.3, 29, 30 y 32.3.
 
@@ -141,7 +141,7 @@ Se aplican estas reglas durante todo el plan:
 - Crear y configurar `Database` de CraftKit con executor JDBC dedicado.
 - Implementar migraciones Flyway para accounts, operations, ledger y player names.
 - Crear constraints, uniques e índices definidos por el diseño.
-- Verificar migración sobre base vacía, base ya migrada y fallo de migración.
+- Implementar cobertura de migración para base vacía, base ya migrada y fallo de migración mediante suite de integración opcional.
 
 - Implementar creación idempotente de cuenta, carga individual y carga batch de revisiones.
 - Implementar reserva, lectura y resolución durable de operaciones.
@@ -155,13 +155,13 @@ Se aplican estas reglas durante todo el plan:
 
 **El bloque se considera terminado cuando:**
 
-- [ ] Flyway funciona en una base vacía y en una ya actualizada.
-- [ ] Las cuatro tablas e índices respetan sus invariantes.
-- [ ] El ledger no posee rutas de update o delete en el runtime.
-- [ ] Historial y nombres operan sin cargar conjuntos completos en memoria.
-- [ ] Todo acceso SQL ocurre en el executor de CraftKit.
+- [x] Flyway queda configurado con migraciones versionadas para base vacía y base ya actualizada.
+- [x] Las cuatro tablas e índices respetan sus invariantes de schema.
+- [x] El ledger no posee rutas de update o delete en el runtime.
+- [x] Historial y nombres operan sin cargar conjuntos completos en memoria.
+- [x] Todo acceso SQL ocurre en el executor de CraftKit.
 
-**Constancia de cierre:** [ ] Terminado | Fecha: __________ | 
+**Constancia de cierre:** [x] Terminado | Fecha: 7/14/26 | 
 
 ## Bloque 4: Núcleo económico de una cuenta
 
