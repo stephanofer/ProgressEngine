@@ -1,5 +1,6 @@
 package com.stephanofer.progressengine;
 
+import com.stephanofer.networkplayersettings.settings.api.PlayerSettingsService;
 import com.stephanofer.progressengine.account.AccountEconomy;
 import com.stephanofer.progressengine.account.BalanceStore;
 import com.stephanofer.progressengine.account.BukkitPostCommitEventDispatcher;
@@ -7,7 +8,7 @@ import com.stephanofer.progressengine.account.PostCommitPublisher;
 import com.stephanofer.progressengine.api.source.OperationSource;
 import com.stephanofer.progressengine.award.AwardCoordinator;
 import com.stephanofer.progressengine.award.BukkitAwardPrepareEventDispatcher;
-import com.stephanofer.progressengine.booster.AwardBoosterCalculator;
+import com.stephanofer.progressengine.booster.NetworkBoostersIntegration;
 import com.stephanofer.progressengine.booster.NetworkBoostersIntegrationFactory;
 import com.stephanofer.progressengine.config.BoostedYamlConfigurationLoader;
 import com.stephanofer.progressengine.config.ConfigurationManager;
@@ -15,8 +16,10 @@ import com.stephanofer.progressengine.config.ConfigurationProblem;
 import com.stephanofer.progressengine.config.ConfigurationReloadResult;
 import com.stephanofer.progressengine.config.ConfigurationSnapshot;
 import com.stephanofer.progressengine.config.ProgressEngineConfig;
+import com.stephanofer.progressengine.lifecycle.BukkitPlayerLifecycleListener;
 import com.stephanofer.progressengine.lifecycle.InFlightTracker;
 import com.stephanofer.progressengine.lifecycle.LifecycleResources;
+import com.stephanofer.progressengine.lifecycle.PlayerLifecycleCoordinator;
 import com.stephanofer.progressengine.lifecycle.RuntimeLifecycle;
 import com.stephanofer.progressengine.lifecycle.RuntimeState;
 import com.stephanofer.progressengine.persistence.ProgressDatabaseFactory;
@@ -30,6 +33,9 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Level;
+import org.bukkit.Bukkit;
+import org.bukkit.event.HandlerList;
+import org.bukkit.plugin.RegisteredServiceProvider;
 import org.bukkit.plugin.java.JavaPlugin;
 
 public final class ProgressEngineRuntime implements AutoCloseable {
@@ -42,6 +48,7 @@ public final class ProgressEngineRuntime implements AutoCloseable {
     private final AtomicReference<ProgressPersistence> persistence = new AtomicReference<>();
     private final AtomicReference<BalanceStore> balanceStore = new AtomicReference<>();
     private final AtomicReference<AccountEconomy> accountEconomy = new AtomicReference<>();
+    private final AtomicReference<PlayerLifecycleCoordinator> playerLifecycle = new AtomicReference<>();
     private final AtomicReference<ProgressPointsService> pointsService = new AtomicReference<>();
 
     private ProgressEngineRuntime(
@@ -123,6 +130,14 @@ public final class ProgressEngineRuntime implements AutoCloseable {
         AccountEconomy value = this.accountEconomy.get();
         if (value == null) {
             throw new IllegalStateException("ProgressEngine account economy is not initialized");
+        }
+        return value;
+    }
+
+    public PlayerLifecycleCoordinator playerLifecycle() {
+        PlayerLifecycleCoordinator value = this.playerLifecycle.get();
+        if (value == null) {
+            throw new IllegalStateException("ProgressEngine player lifecycle is not initialized");
         }
         return value;
     }
@@ -211,7 +226,14 @@ public final class ProgressEngineRuntime implements AutoCloseable {
                 disableOnMainThread();
                 return;
             }
-            initializeEconomicRuntime(created, snapshot);
+            runOnMainThread(() -> {
+                try {
+                    initializeEconomicRuntime(created, snapshot);
+                } catch (RuntimeException exception) {
+                    this.plugin.getLogger().log(Level.SEVERE, "ProgressEngine failed to initialize economic runtime", exception);
+                    disableOnMainThread();
+                }
+            });
         });
     }
 
@@ -235,18 +257,41 @@ public final class ProgressEngineRuntime implements AutoCloseable {
             new com.stephanofer.progressengine.transaction.AccountMutationSequencer(),
             postCommitPublisher
         );
-        AwardBoosterCalculator boosterCalculator = createAwardBoosterCalculator(snapshot);
+        PlayerSettingsService playerSettings = resolvePlayerSettingsService();
+        NetworkBoostersIntegration boostersIntegration = resolveNetworkBoosters(snapshot);
         AwardCoordinator awardCoordinator = new AwardCoordinator(
             economy,
             new BukkitAwardPrepareEventDispatcher(this.plugin, this.plugin.getLogger()),
-            boosterCalculator,
+            boostersIntegration.awardCalculator(),
             this::activeConfig
+        );
+        PlayerLifecycleCoordinator lifecycleCoordinator = new PlayerLifecycleCoordinator(
+            store,
+            persistence.playerNames()::updateCurrentMapping,
+            playerSettings::isReady,
+            boostersIntegration.service().map(service -> new PlayerLifecycleCoordinator.PlayerBoostersReadiness() {
+                @Override
+                public java.util.concurrent.CompletableFuture<Void> load(java.util.UUID playerId) {
+                    return service.load(playerId).thenApply(snapshot -> null);
+                }
+
+                @Override
+                public boolean isReady(java.util.UUID playerId) {
+                    return service.isReady(playerId);
+                }
+            }),
+            this.inFlightTracker,
+            this::runOnMainThread,
+            this::scheduleDelayed,
+            this.plugin.getLogger(),
+            Clock.systemUTC()
         );
         ProgressPointsService service = new ProgressPointsService(
             store,
             economy,
             awardCoordinator,
             this.inFlightTracker,
+            lifecycleCoordinator,
             this::activeConfig
         );
 
@@ -258,26 +303,68 @@ public final class ProgressEngineRuntime implements AutoCloseable {
             store.close();
             throw new IllegalStateException("ProgressEngine account economy was already initialized");
         }
+        if (!this.playerLifecycle.compareAndSet(null, lifecycleCoordinator)) {
+            lifecycleCoordinator.close();
+            store.close();
+            throw new IllegalStateException("ProgressEngine player lifecycle was already initialized");
+        }
         if (!this.pointsService.compareAndSet(null, service)) {
+            lifecycleCoordinator.close();
             store.close();
             throw new IllegalStateException("ProgressEngine points service was already initialized");
         }
         this.resources.register("balance-store", store);
+        this.resources.register("player-lifecycle", lifecycleCoordinator);
+        BukkitPlayerLifecycleListener listener = new BukkitPlayerLifecycleListener(lifecycleCoordinator, playerSettings);
+        this.plugin.getServer().getPluginManager().registerEvents(listener, this.plugin);
+        this.resources.register("player-lifecycle-listener", () -> HandlerList.unregisterAll(listener));
+        processAlreadyOnlinePlayers(playerSettings, lifecycleCoordinator);
         if (this.lifecycle.state() == RuntimeState.STARTING) {
             this.lifecycle.transitionTo(RuntimeState.READY);
         }
         this.plugin.getLogger().info("ProgressEngine economic runtime initialized. Public service remains hidden until later blocks are complete.");
     }
 
-    private AwardBoosterCalculator createAwardBoosterCalculator(ConfigurationSnapshot snapshot) {
-        if (!snapshot.config().integrations().networkBoostersEnabled()) {
-            return AwardBoosterCalculator.disabled();
+    private PlayerSettingsService resolvePlayerSettingsService() {
+        RegisteredServiceProvider<PlayerSettingsService> registration = this.plugin.getServer().getServicesManager()
+            .getRegistration(PlayerSettingsService.class);
+        if (registration == null) {
+            throw new IllegalStateException("NetworkPlayerSettings PlayerSettingsService is not registered");
         }
-        org.bukkit.plugin.Plugin boostersPlugin = this.plugin.getServer().getPluginManager().getPlugin("NetworkBoosters");
-        if (boostersPlugin == null || !boostersPlugin.isEnabled()) {
-            return AwardBoosterCalculator.disabled();
+        return registration.getProvider();
+    }
+
+    private NetworkBoostersIntegration resolveNetworkBoosters(ConfigurationSnapshot snapshot) {
+        return NetworkBoostersIntegrationFactory.resolve(this.plugin, snapshot.config().integrations().networkBoostersEnabled());
+    }
+
+    private void processAlreadyOnlinePlayers(PlayerSettingsService playerSettings, PlayerLifecycleCoordinator lifecycleCoordinator) {
+        for (org.bukkit.entity.Player player : this.plugin.getServer().getOnlinePlayers()) {
+            if (!player.isOnline() || !playerSettings.isReady(player.getUniqueId())) {
+                continue;
+            }
+            lifecycleCoordinator.startSession(player.getUniqueId(), player.getName(), player::isOnline);
         }
-        return NetworkBoostersIntegrationFactory.create(this.plugin, true);
+    }
+
+    private void runOnMainThread(Runnable task) {
+        Objects.requireNonNull(task, "task");
+        if (Bukkit.isPrimaryThread()) {
+            task.run();
+            return;
+        }
+        try {
+            this.plugin.getServer().getScheduler().runTask(this.plugin, task);
+        } catch (RuntimeException exception) {
+            this.plugin.getLogger().log(Level.WARNING, "ProgressEngine could not schedule lifecycle work during shutdown", exception);
+        }
+    }
+
+    private AutoCloseable scheduleDelayed(Runnable task, long delayTicks) {
+        Objects.requireNonNull(task, "task");
+        org.bukkit.scheduler.BukkitTask scheduled = this.plugin.getServer().getScheduler()
+            .runTaskLater(this.plugin, task, delayTicks);
+        return scheduled::cancel;
     }
 
     private ProgressEngineConfig activeConfig() {

@@ -85,6 +85,12 @@ final class PersistenceRepositoryIntegrationTest extends PersistenceIntegrationT
             assertTrue(persistence.playerNames().findByUsername("vendimia").join().isEmpty());
             assertEquals(playerId, persistence.playerNames().findByUsername("vendimiapro").join().orElseThrow().playerId());
             assertEquals(1, persistence.playerNames().loadRecentSuggestions(10).join().size());
+
+            UUID reusedNameOwner = UUID.randomUUID();
+            persistence.playerNames().updateCurrentMapping(reusedNameOwner, "Vendimia", now.plusSeconds(2)).join();
+            assertEquals(reusedNameOwner, persistence.playerNames().findByUsername("vendimia").join().orElseThrow().playerId());
+            assertEquals(playerId, persistence.playerNames().findByUsername("vendimiapro").join().orElseThrow().playerId());
+            assertEquals(2, persistence.playerNames().loadRecentSuggestions(10).join().size());
         } finally {
             cleanup(persistence);
         }

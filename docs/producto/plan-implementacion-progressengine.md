@@ -297,12 +297,12 @@ Se aplican estas reglas durante todo el plan:
 
 **El bloque se considera terminado cuando:**
 
-- [ ] Award es idempotente y auditable como tipo propio.
-- [ ] Prepare, boosters, persistencia, caché y eventos ocurren en el orden correcto.
-- [ ] Un booster no listo se espera; uno fallido no produce un award incorrecto.
-- [ ] Todas las mutaciones del `PointsService` tienen implementación real.
+- [x] Award es idempotente y auditable como tipo propio.
+- [x] Prepare, boosters, persistencia, caché y eventos ocurren en el orden correcto.
+- [x] Un booster no listo se espera; uno fallido no produce un award incorrecto.
+- [x] Todas las mutaciones del `PointsService` tienen implementación real.
 
-**Constancia de cierre:** [ ] Terminado | Fecha: __________ | 
+**Constancia de cierre:** [x] Terminado | Fecha: 7/15/26 | 
 
 ## Bloque 8: Lifecycle y readiness del jugador
 
@@ -331,12 +331,12 @@ Se aplican estas reglas durante todo el plan:
 
 **El bloque se considera terminado cuando:**
 
-- [ ] Ningún jugador aparece ready con dependencias incompletas.
-- [ ] Una carga de un epoch viejo no publica estado.
-- [ ] Logout no cancela ni falsea una operación ya enviada.
-- [ ] Nombres actuales se mantienen correctos ante rename y reutilización.
+- [x] Ningún jugador aparece ready con dependencias incompletas.
+- [x] Una carga de un epoch viejo no publica estado.
+- [x] Logout no cancela ni falsea una operación ya enviada.
+- [x] Nombres actuales se mantienen correctos ante rename y reutilización.
 
-**Constancia de cierre:** [ ] Terminado | Fecha: __________ | 
+**Constancia de cierre:** [x] Terminado | Fecha: 7/15/26 | 
 
 ## Bloque 9: Localización, identidad y feedback
 

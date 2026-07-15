@@ -37,8 +37,8 @@ public final class BalanceStore implements AutoCloseable {
         this(persistence.accounts()::createOrLoad, settings, inFlightTracker, clock, Ticker.systemTicker());
     }
 
-    BalanceStore(AccountSnapshotLoader loader, ProgressEngineConfig.CacheSettings settings,
-                 InFlightTracker inFlightTracker, Clock clock, Ticker ticker) {
+    public BalanceStore(AccountSnapshotLoader loader, ProgressEngineConfig.CacheSettings settings,
+                        InFlightTracker inFlightTracker, Clock clock, Ticker ticker) {
         this.loader = Objects.requireNonNull(loader, "loader");
         Objects.requireNonNull(settings, "settings");
         this.inFlightTracker = Objects.requireNonNull(inFlightTracker, "inFlightTracker");
@@ -186,7 +186,7 @@ public final class BalanceStore implements AutoCloseable {
     }
 
     @FunctionalInterface
-    interface AccountSnapshotLoader {
+    public interface AccountSnapshotLoader {
         CompletableFuture<StoredAccount> load(UUID playerId);
     }
 

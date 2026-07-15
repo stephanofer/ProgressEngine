@@ -20,6 +20,7 @@ import com.stephanofer.progressengine.api.source.OperationSource;
 import com.stephanofer.progressengine.award.AwardCoordinator;
 import com.stephanofer.progressengine.config.ProgressEngineConfig;
 import com.stephanofer.progressengine.lifecycle.InFlightTracker;
+import com.stephanofer.progressengine.lifecycle.PlayerReadiness;
 import com.stephanofer.progressengine.lifecycle.WorkKind;
 import com.stephanofer.progressengine.lifecycle.WorkPermit;
 import java.util.Objects;
@@ -34,16 +35,19 @@ final class ProgressPointsClient implements PointsClient {
     private final AccountEconomy accountEconomy;
     private final AwardCoordinator awardCoordinator;
     private final InFlightTracker inFlightTracker;
+    private final PlayerReadiness playerReadiness;
     private final Supplier<ProgressEngineConfig> configSupplier;
 
     ProgressPointsClient(String pluginName, BalanceStore balanceStore, AccountEconomy accountEconomy,
-                         AwardCoordinator awardCoordinator, InFlightTracker inFlightTracker,
-                         Supplier<ProgressEngineConfig> configSupplier) {
+                          AwardCoordinator awardCoordinator, InFlightTracker inFlightTracker,
+                          PlayerReadiness playerReadiness,
+                          Supplier<ProgressEngineConfig> configSupplier) {
         this.pluginName = Objects.requireNonNull(pluginName, "pluginName");
         this.balanceStore = Objects.requireNonNull(balanceStore, "balanceStore");
         this.accountEconomy = Objects.requireNonNull(accountEconomy, "accountEconomy");
         this.awardCoordinator = Objects.requireNonNull(awardCoordinator, "awardCoordinator");
         this.inFlightTracker = Objects.requireNonNull(inFlightTracker, "inFlightTracker");
+        this.playerReadiness = Objects.requireNonNull(playerReadiness, "playerReadiness");
         this.configSupplier = Objects.requireNonNull(configSupplier, "configSupplier");
     }
 
@@ -64,7 +68,7 @@ final class ProgressPointsClient implements PointsClient {
 
     @Override
     public boolean isReady(UUID playerId) {
-        return this.balanceStore.cached(playerId).isPresent();
+        return this.playerReadiness.isReady(playerId);
     }
 
     @Override
