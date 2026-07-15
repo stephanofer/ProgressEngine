@@ -1,0 +1,63 @@
+# ProgressEngine runtime configuration.
+# MySQL remains the only durable source of truth; Redis and local cache are reconstructable.
+config-version: 1
+
+# Must be unique across the HERA network. Used for audit and Redis message origin checks.
+server-id: "lobby-1"
+
+economy:
+  maximum-balance: 9223372036854775807
+  award-rounding: "FLOOR"
+
+database:
+  host: "127.0.0.1"
+  port: 3306
+  name: "hera_network"
+  username: "progressengine"
+  password: ""
+  table-prefix: ""
+  pool:
+    maximum-size: 10
+    minimum-idle: 2
+    connection-timeout-millis: 10000
+    validation-timeout-millis: 5000
+    idle-timeout-millis: 600000
+    max-lifetime-millis: 1800000
+    leak-detection-threshold-millis: 0
+
+redis:
+  host: "127.0.0.1"
+  port: 6379
+  database: 0
+  username: ""
+  password: ""
+  ssl: false
+  verify-peer: true
+  command-timeout-millis: 3000
+  connect-timeout-millis: 3000
+  shutdown-timeout-millis: 10000
+  request-queue-size: 10000
+  reconnect-min-delay-millis: 100
+  reconnect-max-delay-millis: 10000
+  io-threads: 2
+  computation-threads: 2
+  namespace:
+    key-prefix: "hera"
+    environment: "production"
+
+cache:
+  maximum-size: 10000
+  expire-after-access-seconds: 1800
+  record-stats: true
+
+reconciliation:
+  normal-interval-seconds: 60
+  degraded-interval-seconds: 10
+  batch-size: 200
+
+integrations:
+  network-boosters-enabled: true
+  placeholder-api-enabled: true
+
+runtime:
+  shutdown-timeout-seconds: 10

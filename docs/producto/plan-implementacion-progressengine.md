@@ -86,13 +86,13 @@ Se aplican estas reglas durante todo el plan:
 
 **El bloque se considera terminado cuando:**
 
-- [ ] El API compila sin depender de CraftKit, Redis, Caffeine, BoostedYAML o implementaciones runtime.
-- [ ] Los modelos públicos son inmutables y expresan todos los outcomes mínimos.
-- [ ] `OperationId` permite generación local segura, encapsulado y restauración canónica, con semántica de retry documentada y probada.
-- [ ] Validación, aritmética, metadata y contratos tienen pruebas unitarias.
-- [ ] El artefacto API produce JAR, sources y Javadocs correctamente.
+- [x] El API compila sin depender de CraftKit, Redis, Caffeine, BoostedYAML o implementaciones runtime.
+- [x] Los modelos públicos son inmutables y expresan todos los outcomes mínimos.
+- [x] `OperationId` permite generación local segura, encapsulado y restauración canónica, con semántica de retry documentada y probada.
+- [x] Validación, aritmética, metadata y contratos tienen pruebas unitarias.
+- [x] El artefacto API produce JAR, sources y Javadocs correctamente.
 
-**Constancia de cierre:** [ ] Terminado | Fecha: __________ | 
+**Constancia de cierre:** [x] Terminado | Fecha: 7/14/26 | 
 
 ## Bloque 2: Configuración y runtime base
 
