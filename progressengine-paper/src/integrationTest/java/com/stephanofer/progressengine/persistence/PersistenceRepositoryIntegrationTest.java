@@ -10,6 +10,8 @@ import com.stephanofer.progressengine.api.operation.OperationReason;
 import com.stephanofer.progressengine.api.operation.OperationType;
 import com.stephanofer.progressengine.api.source.OperationActor;
 import com.stephanofer.progressengine.api.source.OperationSource;
+import com.stephanofer.progressengine.api.transaction.BalanceChange;
+import com.stephanofer.progressengine.transaction.OperationResultCodec;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -53,7 +55,7 @@ final class PersistenceRepositoryIntegrationTest extends PersistenceIntegrationT
                 persistence.operations().complete(connection, new OperationCompletion(
                     operationId,
                     OperationStatus.SUCCESS,
-                    OperationResultPayload.empty(),
+                    OperationResultCodec.successPayload(BalanceChange.single(playerId, 0L, 0L, 0L, 1L)),
                     now.plusMillis(1)
                 ));
                 persistence.ledger().append(connection, List.of(new LedgerEntryDraft(

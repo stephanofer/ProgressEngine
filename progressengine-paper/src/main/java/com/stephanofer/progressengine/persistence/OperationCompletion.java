@@ -12,6 +12,9 @@ public record OperationCompletion(OperationId operationId, OperationStatus statu
             throw new IllegalArgumentException("completion status cannot be PENDING");
         }
         Objects.requireNonNull(payload, "payload");
+        if (payload.version().isEmpty()) {
+            throw new IllegalArgumentException("completed operation requires a result payload");
+        }
         Objects.requireNonNull(completedAt, "completedAt");
     }
 }

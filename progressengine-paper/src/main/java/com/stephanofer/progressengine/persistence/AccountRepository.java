@@ -66,15 +66,68 @@ public final class AccountRepository {
         }
     }
 
-    StoredAccount createOrLoad(Connection connection, UUID playerId) throws SQLException {
+    public StoredAccount createOrLoad(Connection connection, UUID playerId) throws SQLException {
+        return createOrLoad(connection, playerId, Optional.empty());
+    }
+
+    public StoredAccount createOrLoad(Connection connection, UUID playerId, java.time.Instant timestamp) throws SQLException {
+        return createOrLoad(connection, playerId, Optional.of(Objects.requireNonNull(timestamp, "timestamp")));
+    }
+
+    private StoredAccount createOrLoad(Connection connection, UUID playerId, Optional<java.time.Instant> timestamp) throws SQLException {
         String insert = "INSERT INTO " + this.tables.accounts()
-            + " (player_uuid, balance, revision, created_at, updated_at) VALUES (?, 0, 0, CURRENT_TIMESTAMP(6), CURRENT_TIMESTAMP(6)) "
+            + " (player_uuid, balance, revision, created_at, updated_at) VALUES (?, 0, 0, "
+            + timestamp.map(ignored -> "?, ?").orElse("CURRENT_TIMESTAMP(6), CURRENT_TIMESTAMP(6)") + ") "
             + "ON DUPLICATE KEY UPDATE player_uuid = player_uuid";
         try (PreparedStatement statement = connection.prepareStatement(insert)) {
             JdbcValues.setUuid(statement, 1, playerId);
+            if (timestamp.isPresent()) {
+                JdbcValues.setInstant(statement, 2, timestamp.get());
+                JdbcValues.setInstant(statement, 3, timestamp.get());
+            }
             statement.executeUpdate();
         }
         return find(connection, playerId).orElseThrow(() -> new PersistenceDataException("Account was not created for " + playerId));
+    }
+
+    public StoredAccount lock(Connection connection, UUID playerId) throws SQLException {
+        BinaryUuid.requireValid(playerId, "playerId");
+        String sql = "SELECT player_uuid, balance, revision, created_at, updated_at FROM " + this.tables.accounts()
+            + " WHERE player_uuid = ? FOR UPDATE";
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            JdbcValues.setUuid(statement, 1, playerId);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                if (!resultSet.next()) {
+                    throw new PersistenceDataException("Account was not found while locking " + playerId);
+                }
+                StoredAccount account = readAccount(resultSet);
+                if (resultSet.next()) {
+                    throw new PersistenceDataException("More than one account row found while locking " + playerId);
+                }
+                return account;
+            }
+        }
+    }
+
+    public StoredAccount updateBalance(Connection connection, UUID playerId, long balance, long revision, java.time.Instant updatedAt)
+        throws SQLException {
+        BinaryUuid.requireValid(playerId, "playerId");
+        if (balance < 0L) throw new IllegalArgumentException("balance cannot be negative");
+        if (revision < 1L) throw new IllegalArgumentException("revision must be positive");
+        Objects.requireNonNull(updatedAt, "updatedAt");
+        String sql = "UPDATE " + this.tables.accounts()
+            + " SET balance = ?, revision = ?, updated_at = ? WHERE player_uuid = ?";
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setLong(1, balance);
+            statement.setLong(2, revision);
+            JdbcValues.setInstant(statement, 3, updatedAt);
+            JdbcValues.setUuid(statement, 4, playerId);
+            int updated = statement.executeUpdate();
+            if (updated != 1) {
+                throw new PersistenceDataException("Expected to update one account but updated " + updated);
+            }
+        }
+        return find(connection, playerId).orElseThrow(() -> new PersistenceDataException("Updated account was not found: " + playerId));
     }
 
     private Map<UUID, Long> loadRevisions(Connection connection, List<UUID> playerIds) throws SQLException {

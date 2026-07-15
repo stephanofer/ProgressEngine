@@ -11,7 +11,7 @@ import java.sql.Statement;
 import java.util.List;
 import java.util.UUID;
 
-abstract class PersistenceIntegrationTestSupport {
+public abstract class PersistenceIntegrationTestSupport {
     private static final List<String> TABLES = List.of(
         DatabaseTables.LEDGER,
         DatabaseTables.PLAYER_NAMES,
@@ -20,7 +20,7 @@ abstract class PersistenceIntegrationTestSupport {
         DatabaseTables.FLYWAY_HISTORY
     );
 
-    final ProgressPersistence createPersistence() {
+    protected final ProgressPersistence createPersistence() {
         String prefix = "it_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12) + '_';
         Database database = Databases.mysql(DatabaseConfig.builder()
             .host(env("PROGRESSENGINE_TEST_DB_HOST"))
@@ -42,7 +42,7 @@ abstract class PersistenceIntegrationTestSupport {
         return new ProgressPersistence(database);
     }
 
-    final void cleanup(ProgressPersistence persistence) {
+    protected final void cleanup(ProgressPersistence persistence) {
         Database database = persistence.database();
         String prefix = database.tablePrefix();
         try {

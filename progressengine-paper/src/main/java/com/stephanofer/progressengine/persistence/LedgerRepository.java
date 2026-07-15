@@ -36,7 +36,7 @@ public final class LedgerRepository {
         return this.database.query(connection -> findByOperation(connection, operationId));
     }
 
-    void append(Connection connection, List<LedgerEntryDraft> entries) throws SQLException {
+    public void append(Connection connection, List<LedgerEntryDraft> entries) throws SQLException {
         Objects.requireNonNull(entries, "entries");
         if (entries.isEmpty()) {
             return;

@@ -33,7 +33,7 @@ public final class OperationRepository {
         return this.database.query(connection -> find(connection, operationId));
     }
 
-    OperationReservation reserve(Connection connection, OperationDraft draft) throws SQLException {
+    public OperationReservation reserve(Connection connection, OperationDraft draft) throws SQLException {
         Objects.requireNonNull(draft, "draft");
         String sql = "INSERT INTO " + this.tables.operations()
             + " (operation_id, fingerprint_version, request_fingerprint, type, status, player_uuid, related_player_uuid, requested_amount, "
@@ -66,7 +66,7 @@ public final class OperationRepository {
         }
     }
 
-    StoredOperation complete(Connection connection, OperationCompletion completion) throws SQLException {
+    public StoredOperation complete(Connection connection, OperationCompletion completion) throws SQLException {
         Objects.requireNonNull(completion, "completion");
         String sql = "UPDATE " + this.tables.operations()
             + " SET status = ?, result_version = ?, result_json = ?, completed_at = ? "
