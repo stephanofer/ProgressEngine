@@ -61,17 +61,11 @@ import org.bukkit.command.CommandSender;
 import org.bukkit.command.ConsoleCommandSender;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
-import org.incendo.cloud.Command;
 import org.incendo.cloud.context.CommandContext;
-import org.incendo.cloud.description.Description;
-import org.incendo.cloud.paper.PaperCommandManager;
 import org.incendo.cloud.paper.util.sender.Source;
-import org.incendo.cloud.parser.standard.StringParser;
-import org.incendo.cloud.suggestion.SuggestionProvider;
 
-public final class PointsCommands implements AutoCloseable {
+public final class PointsCommands implements PointsCommandExecutor, AutoCloseable {
     private final JavaPlugin plugin;
-    private final PaperCommandManager.Bootstrapped<Source> manager;
     private final PointsClient points;
     private final ProgressPersistence persistence;
     private final ConfigurationManager configurationManager;
@@ -93,16 +87,15 @@ public final class PointsCommands implements AutoCloseable {
     private final AtomicBoolean closed = new AtomicBoolean();
     private org.bukkit.scheduler.BukkitTask cleanupTask;
 
-    public PointsCommands(JavaPlugin plugin, PaperCommandManager.Bootstrapped<Source> manager, PointsClient points,
+    public PointsCommands(JavaPlugin plugin, PointsClient points,
                           ProgressPersistence persistence, ConfigurationManager configurationManager,
-                           BalanceStore balanceStore, InFlightTracker inFlightTracker,
+                          BalanceStore balanceStore, InFlightTracker inFlightTracker,
                            Supplier<RuntimeState> stateSupplier, Supplier<ConfigurationSnapshot> snapshotSupplier,
                            Supplier<Optional<RedisSyncStatus>> redisStatusSupplier,
                            Supplier<Optional<DatabaseHealthMonitor.Status>> databaseStatusSupplier,
                            Supplier<String> integrationStatusSupplier, LocalizedMessages messages,
                            PlayerIdentityRenderer identities, FeedbackService feedback, Logger logger, Clock clock) {
         this.plugin = Objects.requireNonNull(plugin, "plugin");
-        this.manager = Objects.requireNonNull(manager, "manager");
         this.points = Objects.requireNonNull(points, "points");
         this.persistence = Objects.requireNonNull(persistence, "persistence");
         this.configurationManager = Objects.requireNonNull(configurationManager, "configurationManager");
@@ -124,7 +117,6 @@ public final class PointsCommands implements AutoCloseable {
 
     public void register() {
         this.suggestions.start();
-        registerCommands();
         this.cleanupTask = this.plugin.getServer().getScheduler().runTaskTimerAsynchronously(
             this.plugin,
             () -> this.persistence.commandIntents().deleteExpired(Instant.now(this.clock), 1000),
@@ -133,58 +125,35 @@ public final class PointsCommands implements AutoCloseable {
         );
     }
 
-    private void registerCommands() {
-        CommandSettings settings = settings();
-        String root = settings.registration().root();
-        String[] aliases = settings.registration().aliases().toArray(String[]::new);
-        command(this.manager.commandBuilder(root, aliases).permission(permission(CommandSettings.CommandPermission.BALANCE))
-            .commandDescription(Description.of("Show your points balance"))
-            .handler(context -> balanceSelf(context.sender().source())));
-        command(this.manager.commandBuilder(root, aliases).literal("balance").permission(permission(CommandSettings.CommandPermission.BALANCE))
-            .optional("target", StringParser.stringParser(), playerSuggestions())
-            .handler(this::balance));
-        command(this.manager.commandBuilder(root, aliases).literal("pay").permission(permission(CommandSettings.CommandPermission.PAY))
-            .required("target", StringParser.stringParser(), playerSuggestions())
-            .required("amount", StringParser.stringParser())
-            .handler(this::pay));
-        command(this.manager.commandBuilder(root, aliases).literal("pay").literal("confirm").permission(permission(CommandSettings.CommandPermission.PAY))
-            .required("token", StringParser.stringParser()).handler(context -> confirmPay(context, false)));
-        command(this.manager.commandBuilder(root, aliases).literal("pay").literal("retry").permission(permission(CommandSettings.CommandPermission.PAY))
-            .required("token", StringParser.stringParser()).handler(context -> confirmPay(context, true)));
-        command(this.manager.commandBuilder(root, aliases).literal("history").permission(permission(CommandSettings.CommandPermission.HISTORY))
-            .optional("page", StringParser.stringParser()).handler(this::historySelf));
-        command(this.manager.commandBuilder(root, aliases).literal("help").permission(permission(CommandSettings.CommandPermission.HELP))
-            .handler(context -> help(context.sender().source())));
-
-        command(this.manager.commandBuilder(root, aliases).literal("admin").literal("add").permission(permission(CommandSettings.CommandPermission.ADMIN_ADD))
-            .required("target", StringParser.stringParser(), playerSuggestions()).required("amount", StringParser.stringParser())
-            .optional("reason", StringParser.stringParser()).handler(context -> adminMutation(context, CommandIntentType.ADMIN_ADD)));
-        command(this.manager.commandBuilder(root, aliases).literal("admin").literal("remove").permission(permission(CommandSettings.CommandPermission.ADMIN_REMOVE))
-            .required("target", StringParser.stringParser(), playerSuggestions()).required("amount", StringParser.stringParser())
-            .optional("reason", StringParser.stringParser()).handler(context -> adminMutation(context, CommandIntentType.ADMIN_REMOVE)));
-        command(this.manager.commandBuilder(root, aliases).literal("admin").literal("set").permission(permission(CommandSettings.CommandPermission.ADMIN_SET))
-            .required("target", StringParser.stringParser(), playerSuggestions()).required("amount", StringParser.stringParser())
-            .optional("reason", StringParser.stringParser()).handler(context -> adminMutation(context, CommandIntentType.ADMIN_SET)));
-        command(this.manager.commandBuilder(root, aliases).literal("admin").literal("reset").permission(permission(CommandSettings.CommandPermission.ADMIN_RESET))
-            .required("target", StringParser.stringParser(), playerSuggestions()).optional("reason", StringParser.stringParser())
-            .handler(context -> adminMutation(context, CommandIntentType.ADMIN_RESET)));
-        command(this.manager.commandBuilder(root, aliases).literal("admin").literal("retry").permission(permission(CommandSettings.CommandPermission.ADMIN_ADD))
-            .required("token", StringParser.stringParser()).handler(context -> confirmAdmin(context)));
-        command(this.manager.commandBuilder(root, aliases).literal("admin").literal("history").permission(permission(CommandSettings.CommandPermission.ADMIN_HISTORY))
-            .required("target", StringParser.stringParser(), playerSuggestions()).optional("page", StringParser.stringParser())
-            .handler(this::historyAdmin));
-        command(this.manager.commandBuilder(root, aliases).literal("admin").literal("reload").permission(permission(CommandSettings.CommandPermission.ADMIN_RELOAD))
-            .handler(context -> reload(context.sender().source())));
-        command(this.manager.commandBuilder(root, aliases).literal("admin").literal("status").permission(permission(CommandSettings.CommandPermission.ADMIN_STATUS))
-            .handler(context -> status(context.sender().source())));
+    @Override
+    public void execute(PointsCommandRoute route, CommandContext<Source> context) {
+        CommandSender sender = context.sender().source();
+        if (!sender.hasPermission(permission(route.permission()))) {
+            this.responder.send(sender, "command-no-permission");
+            return;
+        }
+        switch (route) {
+            case BALANCE_SELF -> balanceSelf(sender);
+            case BALANCE -> balance(context);
+            case PAY -> pay(context);
+            case PAY_CONFIRM -> confirmPay(context, false);
+            case PAY_RETRY -> confirmPay(context, true);
+            case HISTORY_SELF -> historySelf(context);
+            case HELP -> help(sender);
+            case ADMIN_ADD -> adminMutation(context, CommandIntentType.ADMIN_ADD);
+            case ADMIN_REMOVE -> adminMutation(context, CommandIntentType.ADMIN_REMOVE);
+            case ADMIN_SET -> adminMutation(context, CommandIntentType.ADMIN_SET);
+            case ADMIN_RESET -> adminMutation(context, CommandIntentType.ADMIN_RESET);
+            case ADMIN_RETRY -> confirmAdmin(context);
+            case ADMIN_HISTORY -> historyAdmin(context);
+            case ADMIN_RELOAD -> reload(sender);
+            case ADMIN_STATUS -> status(sender);
+        }
     }
 
-    private void command(Command.Builder<Source> builder) {
-        this.manager.command(builder);
-    }
-
-    private SuggestionProvider<Source> playerSuggestions() {
-        return SuggestionProvider.blockingStrings((context, input) -> this.suggestions.suggestions(input.lastRemainingToken()));
+    @Override
+    public List<String> suggestPlayers(String input) {
+        return this.suggestions.suggestions(input);
     }
 
     private String permission(CommandSettings.CommandPermission permission) {

@@ -15,6 +15,7 @@ import com.stephanofer.progressengine.award.BukkitAwardPrepareEventDispatcher;
 import com.stephanofer.progressengine.booster.NetworkBoostersIntegration;
 import com.stephanofer.progressengine.booster.NetworkBoostersIntegrationFactory;
 import com.stephanofer.progressengine.command.PointsCommands;
+import com.stephanofer.progressengine.command.ProgressEngineCommandBridge;
 import com.stephanofer.progressengine.config.BoostedYamlConfigurationLoader;
 import com.stephanofer.progressengine.config.ConfigurationManager;
 import com.stephanofer.progressengine.config.ConfigurationProblem;
@@ -61,12 +62,10 @@ import org.bukkit.plugin.RegisteredServiceProvider;
 import org.bukkit.plugin.ServicePriority;
 import org.bukkit.plugin.java.JavaPlugin;
 import net.luckperms.api.LuckPerms;
-import org.incendo.cloud.paper.PaperCommandManager;
-import org.incendo.cloud.paper.util.sender.Source;
 
 public final class ProgressEngineRuntime implements AutoCloseable {
     private final JavaPlugin plugin;
-    private final PaperCommandManager.Bootstrapped<Source> commandManager;
+    private final ProgressEngineCommandBridge commandBridge;
     private final RuntimeLifecycle lifecycle;
     private final InFlightTracker inFlightTracker;
     private final LifecycleResources resources;
@@ -92,14 +91,14 @@ public final class ProgressEngineRuntime implements AutoCloseable {
 
     private ProgressEngineRuntime(
         JavaPlugin plugin,
-        PaperCommandManager.Bootstrapped<Source> commandManager,
+        ProgressEngineCommandBridge commandBridge,
         RuntimeLifecycle lifecycle,
         InFlightTracker inFlightTracker,
         LifecycleResources resources,
         ConfigurationManager configurationManager
     ) {
         this.plugin = Objects.requireNonNull(plugin, "plugin");
-        this.commandManager = Objects.requireNonNull(commandManager, "commandManager");
+        this.commandBridge = Objects.requireNonNull(commandBridge, "commandBridge");
         this.lifecycle = Objects.requireNonNull(lifecycle, "lifecycle");
         this.inFlightTracker = Objects.requireNonNull(inFlightTracker, "inFlightTracker");
         this.resources = Objects.requireNonNull(resources, "resources");
@@ -108,9 +107,9 @@ public final class ProgressEngineRuntime implements AutoCloseable {
         this.resources.register("configuration-manager", this.configurationManager);
     }
 
-    public static ProgressEngineRuntime create(JavaPlugin plugin, PaperCommandManager.Bootstrapped<Source> commandManager) {
+    public static ProgressEngineRuntime create(JavaPlugin plugin, ProgressEngineCommandBridge commandBridge) {
         Objects.requireNonNull(plugin, "plugin");
-        Objects.requireNonNull(commandManager, "commandManager");
+        Objects.requireNonNull(commandBridge, "commandBridge");
         RuntimeLifecycle lifecycle = new RuntimeLifecycle();
         InFlightTracker inFlightTracker = new InFlightTracker(lifecycle);
         LifecycleResources resources = new LifecycleResources();
@@ -119,7 +118,7 @@ public final class ProgressEngineRuntime implements AutoCloseable {
             new BoostedYamlConfigurationLoader(plugin.getDataFolder().toPath(), plugin::getResource, Clock.systemUTC()),
             asyncExecutor
         );
-        return new ProgressEngineRuntime(plugin, commandManager, lifecycle, inFlightTracker, resources, configurationManager);
+        return new ProgressEngineRuntime(plugin, commandBridge, lifecycle, inFlightTracker, resources, configurationManager);
     }
 
     public RuntimeState state() {
@@ -231,6 +230,7 @@ public final class ProgressEngineRuntime implements AutoCloseable {
             this.lifecycle.transitionTo(RuntimeState.SHUTTING_DOWN);
         }
 
+        this.commandBridge.clear();
         unregisterPointsService();
         this.dispatchGate.close();
         closeReference(this.placeholderExpansion, "placeholder-expansion");
@@ -531,7 +531,6 @@ public final class ProgressEngineRuntime implements AutoCloseable {
         startDatabaseHealthMonitor(persistence);
         PointsCommands commands = new PointsCommands(
             this.plugin,
-            this.commandManager,
             service.client(this.plugin),
             persistence,
             this.configurationManager,
@@ -553,6 +552,7 @@ public final class ProgressEngineRuntime implements AutoCloseable {
             commands.close();
             throw new IllegalStateException("ProgressEngine commands were already initialized");
         }
+        this.commandBridge.set(commands);
         this.resources.register("commands", commands);
         registerPlaceholderExpansion(lifecycleCoordinator, store, playerSettings, snapshot.config());
         this.integrationStatus.set("networkBoosters=" + boostersIntegration.status()
