@@ -14,6 +14,7 @@ public record NetworkBoostersIntegration(Status status, Optional<NetworkBoosters
     public enum Status {
         DISABLED,
         ABSENT,
+        UNAVAILABLE,
         AVAILABLE
     }
 }

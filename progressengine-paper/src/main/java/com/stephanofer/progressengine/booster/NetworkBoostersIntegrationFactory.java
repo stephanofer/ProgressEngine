@@ -16,30 +16,26 @@ public final class NetworkBoostersIntegrationFactory {
 
     public static NetworkBoostersIntegration resolve(JavaPlugin plugin, boolean enabled) {
         if (!enabled) {
-            return new NetworkBoostersIntegration(
-                NetworkBoostersIntegration.Status.DISABLED,
-                Optional.empty(),
-                AwardBoosterCalculator.disabled()
-            );
+            throw new IllegalStateException("NetworkBoosters integration cannot be disabled");
         }
         Plugin boostersPlugin = plugin.getServer().getPluginManager().getPlugin("NetworkBoosters");
         if (boostersPlugin == null || !boostersPlugin.isEnabled()) {
+            throw new IllegalStateException("NetworkBoosters is required but is not enabled");
+        }
+        try {
+            RegisteredServiceProvider<NetworkBoostersService> registration = plugin.getServer().getServicesManager()
+                .getRegistration(NetworkBoostersService.class);
+            if (registration == null) {
+                throw new IllegalStateException("NetworkBoosters is required but its public service is not registered");
+            }
+            NetworkBoostersService service = registration.getProvider();
             return new NetworkBoostersIntegration(
-                NetworkBoostersIntegration.Status.ABSENT,
-                Optional.empty(),
-                AwardBoosterCalculator.disabled()
+                NetworkBoostersIntegration.Status.AVAILABLE,
+                Optional.of(service),
+                new NetworkBoostersAwardCalculator(service)
             );
+        } catch (LinkageError error) {
+            throw new IllegalStateException("NetworkBoosters is required but its public API is not accessible", error);
         }
-        RegisteredServiceProvider<NetworkBoostersService> registration = plugin.getServer().getServicesManager()
-            .getRegistration(NetworkBoostersService.class);
-        if (registration == null) {
-            throw new IllegalStateException("NetworkBoosters is enabled but its public service is not registered");
-        }
-        NetworkBoostersService service = registration.getProvider();
-        return new NetworkBoostersIntegration(
-            NetworkBoostersIntegration.Status.AVAILABLE,
-            Optional.of(service),
-            new NetworkBoostersAwardCalculator(service)
-        );
     }
 }
