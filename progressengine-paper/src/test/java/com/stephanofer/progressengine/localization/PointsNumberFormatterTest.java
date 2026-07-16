@@ -19,7 +19,8 @@ final class PointsNumberFormatterTest {
             NumberFormatSettings.CompactMagnitude.TRILLION, "T",
             NumberFormatSettings.CompactMagnitude.QUADRILLION, "Qa",
             NumberFormatSettings.CompactMagnitude.QUINTILLION, "Qi"
-        )
+        ),
+        "Loading..."
     );
 
     @Test

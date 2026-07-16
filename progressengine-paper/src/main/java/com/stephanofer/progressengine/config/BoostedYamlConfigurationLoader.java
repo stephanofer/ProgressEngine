@@ -753,6 +753,7 @@ public final class BoostedYamlConfigurationLoader implements ConfigurationLoader
             "number-format.decimal-separator",
             "number-format.compact-decimals",
             "number-format.compact-space",
+            "number-format.loading-text",
             "number-format.compact-suffixes"
         ).contains(route)) {
             return;
@@ -825,12 +826,13 @@ public final class BoostedYamlConfigurationLoader implements ConfigurationLoader
         String decimal = reader.text("number-format.decimal-separator", ".", false, true);
         int decimals = reader.intRange("number-format.compact-decimals", 0, 2, 1);
         boolean compactSpace = reader.bool("number-format.compact-space", false);
+        String loadingText = reader.text("number-format.loading-text", "Loading...", false, false);
         Map<NumberFormatSettings.CompactMagnitude, String> suffixes = new HashMap<>();
         for (NumberFormatSettings.CompactMagnitude magnitude : NumberFormatSettings.CompactMagnitude.values()) {
             suffixes.put(magnitude, reader.text("number-format.compact-suffixes." + magnitude.configKey(), defaultSuffix(magnitude), false, false));
         }
         try {
-            return new NumberFormatSettings(grouping, decimal, decimals, compactSpace, suffixes);
+            return new NumberFormatSettings(grouping, decimal, decimals, compactSpace, suffixes, loadingText);
         } catch (IllegalArgumentException exception) {
             problems.add(new ConfigurationProblem(fileName + ":number-format", exception.getMessage()));
             return defaultNumberFormat();
@@ -1012,7 +1014,7 @@ public final class BoostedYamlConfigurationLoader implements ConfigurationLoader
             NumberFormatSettings.CompactMagnitude.TRILLION, "T",
             NumberFormatSettings.CompactMagnitude.QUADRILLION, "Qa",
             NumberFormatSettings.CompactMagnitude.QUINTILLION, "Qi"
-        ));
+        ), "Loading...");
     }
 
     private static String defaultSuffix(NumberFormatSettings.CompactMagnitude magnitude) {

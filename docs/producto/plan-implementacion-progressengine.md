@@ -473,12 +473,12 @@ Se aplican estas reglas durante todo el plan:
 
 **El bloque se considera terminado cuando:**
 
-- [ ] Los cuatro placeholders cumplen su contrato exacto.
-- [ ] Loading nunca se representa como balance cero.
-- [ ] Los requests no producen I/O ni futures.
-- [ ] La ausencia de PlaceholderAPI no afecta el runtime económico.
+- [x] Los cuatro placeholders cumplen su contrato exacto.
+- [x] Loading nunca se representa como balance cero.
+- [x] Los requests no producen I/O ni futures.
+- [x] La ausencia de PlaceholderAPI no afecta el runtime económico.
 
-**Constancia de cierre:** [ ] Terminado | Fecha: __________ | 
+**Constancia de cierre:** [x] Terminado | Fecha: 7/16/26 |
 
 ## Bloque 13: Startup, shutdown y hardening operativo
 

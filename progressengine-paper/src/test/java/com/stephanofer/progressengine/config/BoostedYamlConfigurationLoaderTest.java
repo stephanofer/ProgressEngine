@@ -33,6 +33,8 @@ final class BoostedYamlConfigurationLoaderTest {
         assertEquals(Long.MAX_VALUE, loaded.snapshot().config().economy().maximumBalance());
         assertEquals("lobby-1", loaded.snapshot().config().serverId());
         assertEquals("en", loaded.snapshot().localization().fallbackLanguage());
+        assertEquals("Loading...", loaded.snapshot().messages().require("en").numberFormat().loadingText());
+        assertEquals("Cargando...", loaded.snapshot().messages().require("es").numberFormat().loadingText());
         assertTrue(loaded.snapshot().messages().require("en").messages().containsKey("points-loading"));
         assertTrue(Files.exists(this.directory.resolve("config.yml")));
         assertTrue(Files.exists(this.directory.resolve("identity.yml")));
@@ -54,6 +56,19 @@ final class BoostedYamlConfigurationLoaderTest {
         ConfigurationLoadException exception = assertThrows(ConfigurationLoadException.class, () -> loader().load(1L));
 
         assertTrue(exception.problems().stream().anyMatch(problem -> problem.path().contains("messages/en.yml:messages.points-loading")));
+    }
+
+    @Test
+    void rejectsMiniMessageLoadingTextForPlaceholders() throws Exception {
+        Files.createDirectories(this.directory.resolve("messages"));
+        Files.writeString(this.directory.resolve("messages/en.yml"), defaultResource("messages/en.yml").replace(
+            "loading-text: \"Loading...\"",
+            "loading-text: \"<yellow>Loading...</yellow>\""
+        ));
+
+        ConfigurationLoadException exception = assertThrows(ConfigurationLoadException.class, () -> loader().load(1L));
+
+        assertTrue(exception.problems().stream().anyMatch(problem -> problem.path().contains("messages/en.yml:number-format")));
     }
 
     @Test

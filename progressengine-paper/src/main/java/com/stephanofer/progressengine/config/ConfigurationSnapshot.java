@@ -51,7 +51,8 @@ public record ConfigurationSnapshot(long revision, Instant loadedAt, ProgressEng
                 NumberFormatSettings.CompactMagnitude.TRILLION, "T",
                 NumberFormatSettings.CompactMagnitude.QUADRILLION, "Qa",
                 NumberFormatSettings.CompactMagnitude.QUINTILLION, "Qi"
-            )
+            ),
+            "Loading..."
         );
     }
 }

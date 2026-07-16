@@ -33,6 +33,7 @@ import com.stephanofer.progressengine.lifecycle.PlayerLifecycleCoordinator;
 import com.stephanofer.progressengine.lifecycle.RuntimeLifecycle;
 import com.stephanofer.progressengine.lifecycle.RuntimeState;
 import com.stephanofer.progressengine.localization.LocalizedMessages;
+import com.stephanofer.progressengine.placeholder.ProgressEnginePlaceholderExpansion;
 import com.stephanofer.progressengine.persistence.ProgressDatabaseFactory;
 import com.stephanofer.progressengine.persistence.ProgressPersistence;
 import com.stephanofer.progressengine.service.ProgressPointsService;
@@ -512,7 +513,53 @@ public final class ProgressEngineRuntime implements AutoCloseable {
             throw new IllegalStateException("ProgressEngine commands were already initialized");
         }
         this.resources.register("commands", commands);
-        this.plugin.getLogger().info("ProgressEngine economic runtime initialized with commands. Public service remains hidden until later blocks are complete.");
+        registerPlaceholderExpansion(lifecycleCoordinator, store, playerSettings);
+        this.plugin.getLogger().info("ProgressEngine economic runtime initialized with commands and optional integrations. Public service remains hidden until later blocks are complete.");
+    }
+
+    private void registerPlaceholderExpansion(PlayerLifecycleCoordinator lifecycleCoordinator, BalanceStore store,
+                                              PlayerSettingsService playerSettings) {
+        if (!this.plugin.getServer().getPluginManager().isPluginEnabled("PlaceholderAPI")) {
+            this.plugin.getLogger().info("PlaceholderAPI is not installed; ProgressEngine placeholders remain disabled.");
+            return;
+        }
+        try {
+            String identifier = ProgressEnginePlaceholderExpansion.identifier();
+            if (me.clip.placeholderapi.PlaceholderAPI.isRegistered(identifier)) {
+                this.plugin.getLogger().severe("ProgressEngine PlaceholderAPI expansion identifier is already registered: " + identifier);
+                return;
+            }
+            ProgressEnginePlaceholderExpansion expansion = new ProgressEnginePlaceholderExpansion(
+                this.plugin,
+                lifecycleCoordinator::isReady,
+                store::cached,
+                this::activeSnapshot
+            );
+            seedPlaceholderLanguages(expansion, playerSettings);
+            if (!expansion.register()) {
+                expansion.close();
+                this.plugin.getLogger().severe("ProgressEngine could not register its PlaceholderAPI expansion.");
+                return;
+            }
+            this.resources.register("placeholder-expansion", expansion);
+            this.plugin.getLogger().info("ProgressEngine PlaceholderAPI expansion registered.");
+        } catch (LinkageError | RuntimeException exception) {
+            this.plugin.getLogger().log(Level.SEVERE, "ProgressEngine could not initialize PlaceholderAPI integration", exception);
+        }
+    }
+
+    private void seedPlaceholderLanguages(ProgressEnginePlaceholderExpansion expansion, PlayerSettingsService playerSettings) {
+        for (org.bukkit.entity.Player player : this.plugin.getServer().getOnlinePlayers()) {
+            if (!player.isOnline() || !playerSettings.isReady(player.getUniqueId())) {
+                continue;
+            }
+            try {
+                expansion.rememberLanguage(player.getUniqueId(), playerSettings.resolvedLanguage(player).code());
+            } catch (RuntimeException exception) {
+                this.plugin.getLogger().log(Level.WARNING, "ProgressEngine could not seed PlaceholderAPI language for "
+                    + player.getUniqueId(), exception);
+            }
+        }
     }
 
     private PlayerSettingsService resolvePlayerSettingsService() {

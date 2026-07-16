@@ -6,6 +6,7 @@ number-format:
   decimal-separator: ","
   compact-decimals: 1
   compact-space: false
+  loading-text: "Cargando..."
   compact-suffixes:
     thousand: "K"
     million: "M"

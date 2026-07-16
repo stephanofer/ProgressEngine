@@ -4,7 +4,8 @@ import java.util.Map;
 import java.util.Objects;
 
 public record NumberFormatSettings(String groupingSeparator, String decimalSeparator, int compactDecimals,
-                                   boolean compactSpace, Map<CompactMagnitude, String> compactSuffixes) {
+                                   boolean compactSpace, Map<CompactMagnitude, String> compactSuffixes,
+                                   String loadingText) {
     public NumberFormatSettings {
         groupingSeparator = requireSeparator(groupingSeparator, "groupingSeparator");
         decimalSeparator = requireSeparator(decimalSeparator, "decimalSeparator");
@@ -22,12 +23,24 @@ public record NumberFormatSettings(String groupingSeparator, String decimalSepar
                 throw new IllegalArgumentException("compact suffix for " + magnitude + " must be present and at most 8 characters");
             }
         }
+        loadingText = requireLoadingText(loadingText);
     }
 
     private static String requireSeparator(String value, String name) {
         Objects.requireNonNull(value, name);
         if (value.isEmpty() || value.length() > 3) {
             throw new IllegalArgumentException(name + " must contain 1 to 3 characters");
+        }
+        return value;
+    }
+
+    private static String requireLoadingText(String value) {
+        Objects.requireNonNull(value, "loadingText");
+        if (value.isBlank() || !value.equals(value.trim()) || value.length() > 64) {
+            throw new IllegalArgumentException("loadingText must be plain text between 1 and 64 characters without surrounding whitespace");
+        }
+        if (value.indexOf('<') >= 0 || value.indexOf('>') >= 0) {
+            throw new IllegalArgumentException("loadingText must be plain text, not MiniMessage");
         }
         return value;
     }
