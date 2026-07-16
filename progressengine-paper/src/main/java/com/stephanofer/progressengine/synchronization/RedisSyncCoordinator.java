@@ -266,7 +266,7 @@ public final class RedisSyncCoordinator implements PostCommitNetworkPublisher, A
 
     private void startRecovery(long generation) {
         cancelScheduledReconciliation();
-        runReconciliation().whenComplete((result, failure) -> {
+        awaitSubscriptions().thenCompose(ignored -> runReconciliation()).whenComplete((result, failure) -> {
             if (failure == null && result != null && !this.closed.get() && this.redis.operationalStatus().isOperational()
                 && this.recoveryGeneration.get() == generation) {
                 reportOperational(true);
@@ -275,6 +275,13 @@ public final class RedisSyncCoordinator implements PostCommitNetworkPublisher, A
             }
             scheduleNextReconciliation();
         });
+    }
+
+    private CompletableFuture<Void> awaitSubscriptions() {
+        return CompletableFuture.allOf(
+            this.invalidationSubscription.initialRegistration(),
+            this.transferSubscription.initialRegistration()
+        );
     }
 
     private CompletableFuture<BalanceReconciler.Result> runReconciliation() {

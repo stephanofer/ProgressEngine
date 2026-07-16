@@ -132,6 +132,36 @@ final class PlayerLifecycleCoordinatorTest {
         assertEquals(0, runtime.readyEvents.get());
     }
 
+    @Test
+    void failedNameUpdatePreventsReadiness() {
+        UUID playerId = UUID.randomUUID();
+        TestRuntime runtime = runtime(
+            id -> CompletableFuture.completedFuture(account(id, 10L, 1L)),
+            Optional.empty(),
+            new AtomicBoolean(true),
+            (id, username, lastSeenAt) -> CompletableFuture.failedFuture(new IllegalStateException("name index failed"))
+        );
+
+        runtime.coordinator.startSession(playerId, "Vendimia", () -> true);
+
+        assertFalse(runtime.coordinator.isReady(playerId));
+        assertEquals(0, runtime.readyEvents.get());
+    }
+
+    @Test
+    void rejectedLoginDiscardsPreloadAndNeverPublishesReady() {
+        UUID playerId = UUID.randomUUID();
+        CompletableFuture<StoredAccount> pending = new CompletableFuture<>();
+        TestRuntime runtime = runtime(id -> pending);
+
+        runtime.coordinator.preload(playerId);
+        runtime.coordinator.startSession(playerId, "Vendimia", () -> false);
+        pending.complete(account(playerId, 10L, 1L));
+
+        assertFalse(runtime.coordinator.isReady(playerId));
+        assertEquals(0, runtime.readyEvents.get());
+    }
+
     private static TestRuntime runtime(BalanceStore.AccountSnapshotLoader loader) {
         return runtime(loader, Optional.empty());
     }
@@ -142,8 +172,15 @@ final class PlayerLifecycleCoordinatorTest {
     }
 
     private static TestRuntime runtime(BalanceStore.AccountSnapshotLoader loader,
+                                        Optional<PlayerLifecycleCoordinator.PlayerBoostersReadiness> boosters,
+                                        AtomicBoolean settingsReady) {
+        return runtime(loader, boosters, settingsReady, (playerId, username, lastSeenAt) -> CompletableFuture.completedFuture(null));
+    }
+
+    private static TestRuntime runtime(BalanceStore.AccountSnapshotLoader loader,
                                        Optional<PlayerLifecycleCoordinator.PlayerBoostersReadiness> boosters,
-                                       AtomicBoolean settingsReady) {
+                                       AtomicBoolean settingsReady,
+                                       PlayerLifecycleCoordinator.PlayerNameUpdater nameUpdater) {
         RuntimeLifecycle lifecycle = new RuntimeLifecycle();
         InFlightTracker inFlightTracker = new InFlightTracker(lifecycle);
         BalanceStore store = new BalanceStore(loader, CACHE_SETTINGS, inFlightTracker, CLOCK, Ticker.systemTicker());
@@ -153,7 +190,7 @@ final class PlayerLifecycleCoordinatorTest {
             store,
             (playerId, username, lastSeenAt) -> {
                 lastNameUpdate.set(playerId);
-                return CompletableFuture.completedFuture(null);
+                return nameUpdater.updateCurrentMapping(playerId, username, lastSeenAt);
             },
             playerId -> settingsReady.get(),
             boosters,

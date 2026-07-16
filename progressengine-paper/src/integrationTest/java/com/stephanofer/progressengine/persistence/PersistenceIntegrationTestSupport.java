@@ -14,6 +14,7 @@ import java.util.UUID;
 public abstract class PersistenceIntegrationTestSupport {
     private static final List<String> TABLES = List.of(
         DatabaseTables.LEDGER,
+        DatabaseTables.COMMAND_INTENTS,
         DatabaseTables.PLAYER_NAMES,
         DatabaseTables.OPERATIONS,
         DatabaseTables.ACCOUNTS,

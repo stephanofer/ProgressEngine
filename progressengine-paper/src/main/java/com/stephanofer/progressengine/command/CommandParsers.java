@@ -41,7 +41,10 @@ final class CommandParsers {
 
     static Optional<UUID> uuid(String input) {
         try {
-            return Optional.of(UUID.fromString(input));
+            UUID value = UUID.fromString(input);
+            return value.getMostSignificantBits() == 0L && value.getLeastSignificantBits() == 0L
+                ? Optional.empty()
+                : Optional.of(value);
         } catch (RuntimeException ignored) {
             return Optional.empty();
         }

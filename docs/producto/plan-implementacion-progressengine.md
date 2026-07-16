@@ -377,7 +377,7 @@ Se aplican estas reglas durante todo el plan:
 - [x] Un reload inválido conserva íntegramente la configuración anterior.
 
 **Constancia de cierre:** [x] Terminado | Fecha: 7/15/26 | 
-
+## Bloque 10: Redis y reconciliación
 
 **Objetivo:** propagar cambios rápidamente y garantizar convergencia aun cuando Pub/Sub pierda mensajes.
 
@@ -449,7 +449,7 @@ Se aplican estas reglas durante todo el plan:
 - [x] Tokens vencidos, usados o ligados a otra revisión no autorizan pagos.
 - [x] History pagina y status diferencia salud de MySQL y Redis.
 
-**Constancia de cierre:** [x] Terminado | Fecha: 7/15.26 |
+**Constancia de cierre:** [x] Terminado | Fecha: 7/15/26 |
 
 ## Bloque 12: PlaceholderAPI
 
@@ -515,7 +515,7 @@ Se aplican estas reglas durante todo el plan:
 
 **Constancia de cierre:** [x] Terminado | Fecha: 7/16/26 |
 
-## Bloque 14: Verificación integral y cierre de 1.0
+## Bloque 14: Verificación integral y cierre
 
 **Objetivo:** demostrar que la implementación completa satisface el producto, no solo que sus piezas compilan por separado.
 
@@ -547,14 +547,14 @@ Se aplican estas reglas durante todo el plan:
 
 **El bloque y ProgressEngine 1.0 se consideran terminados cuando:**
 
-- [ ] Todos los criterios de aceptación de ProgressEngine 1.0 están demostrados.
-- [ ] Todos los edge cases obligatorios están cubiertos y pasan.
-- [ ] Las suites unitarias, MySQL, Redis y Paper real terminan correctamente.
-- [ ] El build final genera artefactos reproducibles sin dependencias filtradas.
-- [ ] No existen rutas que confirmen éxito antes de MySQL, bloqueen el main thread o usen caché/Redis como autoridad.
-- [ ] El alcance implementado coincide exactamente con ProgressEngine 1.0.
+- [x] Todos los criterios de aceptación de ProgressEngine 1.0 están demostrados.
+- [x] Todos los edge cases obligatorios están cubiertos y pasan.
+- [x] Las suites unitarias, MySQL, Redis y Paper real terminan correctamente.
+- [x] El build final genera artefactos reproducibles sin dependencias filtradas.
+- [x] No existen rutas que confirmen éxito antes de MySQL, bloqueen el main thread o usen caché/Redis como autoridad.
+- [x] El alcance implementado coincide exactamente con ProgressEngine 1.0.
 
-**Constancia de cierre:** [ ] Terminado | Fecha: __________ | 
+**Constancia de cierre:** [x] Terminado | Fecha: 7/16/26 |
 
 ## Matriz de cobertura
 

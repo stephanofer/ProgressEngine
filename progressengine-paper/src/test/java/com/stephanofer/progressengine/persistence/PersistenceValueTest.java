@@ -10,6 +10,7 @@ import com.stephanofer.progressengine.api.operation.OperationId;
 import com.stephanofer.progressengine.api.operation.OperationMetadata;
 import com.stephanofer.progressengine.api.operation.OperationReason;
 import com.stephanofer.progressengine.api.operation.OperationType;
+import com.stephanofer.progressengine.api.source.ActorType;
 import com.stephanofer.progressengine.api.source.OperationActor;
 import com.stephanofer.progressengine.api.source.OperationSource;
 import java.time.Instant;
@@ -207,8 +208,94 @@ final class PersistenceValueTest {
         }, BinaryUuid.encode(uuid));
     }
 
+    @Test
+    void commandIntentDraftValidatesEconomicAuthorizationShapeAndCopiesTokenHash() {
+        byte[] hash = new byte[32];
+        hash[31] = 7;
+        UUID ownerId = UUID.randomUUID();
+        UUID targetId = UUID.randomUUID();
+        CommandIntentDraft draft = new CommandIntentDraft(
+            hash,
+            OperationId.generate(),
+            CommandIntentType.PAY,
+            CommandIntentState.AWAITING_CONFIRMATION,
+            Optional.of(ownerId),
+            ActorType.PLAYER,
+            Optional.of(ownerId),
+            ownerId,
+            Optional.of(targetId),
+            100L,
+            OperationReason.of("test:pay"),
+            Optional.of(1L),
+            "server-1",
+            Instant.EPOCH,
+            Instant.EPOCH.plusSeconds(30L)
+        );
+
+        hash[31] = 99;
+        byte[] returned = draft.tokenHash();
+        returned[31] = 10;
+
+        assertEquals(7, draft.tokenHash()[31]);
+        assertEquals(Optional.of(ownerId), draft.ownerId());
+        assertEquals(Optional.of(targetId), draft.targetId());
+        assertThrows(IllegalArgumentException.class, () -> new CommandIntentDraft(
+            new byte[31], OperationId.generate(), CommandIntentType.PAY, CommandIntentState.AWAITING_CONFIRMATION,
+            Optional.of(ownerId), ActorType.PLAYER, Optional.of(ownerId), ownerId, Optional.of(targetId), 100L,
+            OperationReason.of("test:pay"), Optional.of(1L), "server-1", Instant.EPOCH, Instant.EPOCH.plusSeconds(30L)
+        ));
+        assertThrows(IllegalArgumentException.class, () -> new CommandIntentDraft(
+            new byte[32], OperationId.generate(), CommandIntentType.PAY, CommandIntentState.AWAITING_CONFIRMATION,
+            Optional.of(ownerId), ActorType.CONSOLE, Optional.of(ownerId), ownerId, Optional.of(targetId), 100L,
+            OperationReason.of("test:pay"), Optional.of(1L), "server-1", Instant.EPOCH, Instant.EPOCH.plusSeconds(30L)
+        ));
+        assertThrows(IllegalArgumentException.class, () -> new CommandIntentDraft(
+            new byte[32], OperationId.generate(), CommandIntentType.PAY, CommandIntentState.AWAITING_CONFIRMATION,
+            Optional.of(ownerId), ActorType.PLAYER, Optional.of(ownerId), ownerId, Optional.of(ownerId), 100L,
+            OperationReason.of("test:pay"), Optional.of(1L), "server-1", Instant.EPOCH, Instant.EPOCH.plusSeconds(30L)
+        ));
+        assertThrows(IllegalArgumentException.class, () -> new CommandIntentDraft(
+            new byte[32], OperationId.generate(), CommandIntentType.PAY, CommandIntentState.AWAITING_CONFIRMATION,
+            Optional.of(ownerId), ActorType.PLAYER, Optional.of(ownerId), ownerId, Optional.of(targetId), 100L,
+            OperationReason.of("test:pay"), Optional.of(0L), "server-1", Instant.EPOCH, Instant.EPOCH.plusSeconds(30L)
+        ));
+    }
+
+    @Test
+    void commandIntentReportsExpiryAndCopiesTokenHash() {
+        byte[] hash = new byte[32];
+        hash[0] = 5;
+        CommandIntent intent = new CommandIntent(
+            hash,
+            OperationId.generate(),
+            CommandIntentType.PAY,
+            CommandIntentState.AWAITING_CONFIRMATION,
+            Optional.of(UUID.randomUUID()),
+            ActorType.PLAYER,
+            Optional.of(UUID.randomUUID()),
+            UUID.randomUUID(),
+            Optional.of(UUID.randomUUID()),
+            100L,
+            OperationReason.of("test:pay"),
+            Optional.of(1L),
+            "server-1",
+            Instant.EPOCH,
+            Instant.EPOCH.plusSeconds(30L),
+            Optional.empty(),
+            Optional.empty()
+        );
+
+        hash[0] = 9;
+        byte[] returned = intent.tokenHash();
+        returned[0] = 10;
+
+        assertEquals(5, intent.tokenHash()[0]);
+        assertFalse(intent.expiredAt(Instant.EPOCH.plusSeconds(29L)));
+        assertTrue(intent.expiredAt(Instant.EPOCH.plusSeconds(30L)));
+    }
+
     private static StoredOperation storedOperation(OperationType type, UUID playerId, Optional<UUID> relatedPlayerId,
-                                                   long amount, byte[] fingerprint) {
+                                                    long amount, byte[] fingerprint) {
         return new StoredOperation(
             OperationId.generate(),
             1,

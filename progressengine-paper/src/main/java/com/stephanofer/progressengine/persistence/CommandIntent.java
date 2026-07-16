@@ -46,4 +46,9 @@ public record CommandIntent(byte[] tokenHash, OperationId operationId, CommandIn
     public boolean expiredAt(Instant now) {
         return !this.expiresAt.isAfter(now);
     }
+
+    @Override
+    public byte[] tokenHash() {
+        return this.tokenHash.clone();
+    }
 }

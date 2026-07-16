@@ -57,4 +57,9 @@ public record CommandIntentDraft(byte[] tokenHash, OperationId operationId, Comm
         if (hash.length != 32) throw new IllegalArgumentException("token hash must be 32 bytes");
         return hash.clone();
     }
+
+    @Override
+    public byte[] tokenHash() {
+        return this.tokenHash.clone();
+    }
 }
