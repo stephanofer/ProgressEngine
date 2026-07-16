@@ -3,6 +3,7 @@ package com.stephanofer.progressengine.feedback;
 import com.stephanofer.networkplayersettings.settings.api.PlayerSettingsService;
 import com.stephanofer.progressengine.config.ConfigurationSnapshot;
 import com.stephanofer.progressengine.config.FeedbackActionConfig;
+import com.stephanofer.progressengine.lifecycle.PaperDispatchGate;
 import com.stephanofer.progressengine.localization.LocalizedMessages;
 import com.stephanofer.progressengine.localization.MessageArguments;
 import java.time.Duration;
@@ -35,15 +36,23 @@ public final class FeedbackService implements Listener, AutoCloseable {
     private final BossBarManager bossBars;
     private final Supplier<ConfigurationSnapshot> snapshotSupplier;
     private final Logger logger;
+    private final PaperDispatchGate gate;
 
     public FeedbackService(JavaPlugin plugin, PlayerSettingsService playerSettings, LocalizedMessages messages,
-                           BossBarManager bossBars, Supplier<ConfigurationSnapshot> snapshotSupplier, Logger logger) {
+                            BossBarManager bossBars, Supplier<ConfigurationSnapshot> snapshotSupplier, Logger logger) {
+        this(plugin, playerSettings, messages, bossBars, snapshotSupplier, logger, new PaperDispatchGate());
+    }
+
+    public FeedbackService(JavaPlugin plugin, PlayerSettingsService playerSettings, LocalizedMessages messages,
+                           BossBarManager bossBars, Supplier<ConfigurationSnapshot> snapshotSupplier, Logger logger,
+                           PaperDispatchGate gate) {
         this.plugin = Objects.requireNonNull(plugin, "plugin");
         this.playerSettings = Objects.requireNonNull(playerSettings, "playerSettings");
         this.messages = Objects.requireNonNull(messages, "messages");
         this.bossBars = Objects.requireNonNull(bossBars, "bossBars");
         this.snapshotSupplier = Objects.requireNonNull(snapshotSupplier, "snapshotSupplier");
         this.logger = Objects.requireNonNull(logger, "logger");
+        this.gate = Objects.requireNonNull(gate, "gate");
     }
 
     public void sendAward(UUID playerId, long amount, long balance) {
@@ -168,11 +177,21 @@ public final class FeedbackService implements Listener, AutoCloseable {
 
     private void runOnMain(Runnable task) {
         if (Bukkit.isPrimaryThread()) {
+            if (!this.gate.acceptsDispatch()) {
+                return;
+            }
             task.run();
             return;
         }
+        if (!this.gate.acceptsDispatch()) {
+            return;
+        }
         try {
-            this.plugin.getServer().getScheduler().runTask(this.plugin, task);
+            this.plugin.getServer().getScheduler().runTask(this.plugin, () -> {
+                if (this.gate.acceptsDispatch()) {
+                    task.run();
+                }
+            });
         } catch (RuntimeException exception) {
             this.logger.log(Level.WARNING, "ProgressEngine could not schedule feedback during shutdown", exception);
         }

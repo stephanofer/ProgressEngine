@@ -25,6 +25,7 @@ import com.stephanofer.progressengine.config.ConfigurationReloadResult;
 import com.stephanofer.progressengine.config.ConfigurationSnapshot;
 import com.stephanofer.progressengine.feedback.FeedbackService;
 import com.stephanofer.progressengine.identity.PlayerIdentityRenderer;
+import com.stephanofer.progressengine.lifecycle.DatabaseHealthMonitor;
 import com.stephanofer.progressengine.lifecycle.InFlightCounts;
 import com.stephanofer.progressengine.lifecycle.InFlightTracker;
 import com.stephanofer.progressengine.lifecycle.RuntimeState;
@@ -51,6 +52,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -78,6 +80,8 @@ public final class PointsCommands implements AutoCloseable {
     private final Supplier<RuntimeState> stateSupplier;
     private final Supplier<ConfigurationSnapshot> snapshotSupplier;
     private final Supplier<Optional<RedisSyncStatus>> redisStatusSupplier;
+    private final Supplier<Optional<DatabaseHealthMonitor.Status>> databaseStatusSupplier;
+    private final Supplier<String> integrationStatusSupplier;
     private final LocalizedMessages messages;
     private final PlayerIdentityRenderer identities;
     private final CommandResponder responder;
@@ -86,14 +90,17 @@ public final class PointsCommands implements AutoCloseable {
     private final CommandTokenGenerator tokens = new CommandTokenGenerator();
     private final Logger logger;
     private final Clock clock;
+    private final AtomicBoolean closed = new AtomicBoolean();
     private org.bukkit.scheduler.BukkitTask cleanupTask;
 
     public PointsCommands(JavaPlugin plugin, PaperCommandManager.Bootstrapped<Source> manager, PointsClient points,
                           ProgressPersistence persistence, ConfigurationManager configurationManager,
-                          BalanceStore balanceStore, InFlightTracker inFlightTracker,
-                          Supplier<RuntimeState> stateSupplier, Supplier<ConfigurationSnapshot> snapshotSupplier,
-                          Supplier<Optional<RedisSyncStatus>> redisStatusSupplier, LocalizedMessages messages,
-                          PlayerIdentityRenderer identities, FeedbackService feedback, Logger logger, Clock clock) {
+                           BalanceStore balanceStore, InFlightTracker inFlightTracker,
+                           Supplier<RuntimeState> stateSupplier, Supplier<ConfigurationSnapshot> snapshotSupplier,
+                           Supplier<Optional<RedisSyncStatus>> redisStatusSupplier,
+                           Supplier<Optional<DatabaseHealthMonitor.Status>> databaseStatusSupplier,
+                           Supplier<String> integrationStatusSupplier, LocalizedMessages messages,
+                           PlayerIdentityRenderer identities, FeedbackService feedback, Logger logger, Clock clock) {
         this.plugin = Objects.requireNonNull(plugin, "plugin");
         this.manager = Objects.requireNonNull(manager, "manager");
         this.points = Objects.requireNonNull(points, "points");
@@ -104,6 +111,8 @@ public final class PointsCommands implements AutoCloseable {
         this.stateSupplier = Objects.requireNonNull(stateSupplier, "stateSupplier");
         this.snapshotSupplier = Objects.requireNonNull(snapshotSupplier, "snapshotSupplier");
         this.redisStatusSupplier = Objects.requireNonNull(redisStatusSupplier, "redisStatusSupplier");
+        this.databaseStatusSupplier = Objects.requireNonNull(databaseStatusSupplier, "databaseStatusSupplier");
+        this.integrationStatusSupplier = Objects.requireNonNull(integrationStatusSupplier, "integrationStatusSupplier");
         this.messages = Objects.requireNonNull(messages, "messages");
         this.identities = Objects.requireNonNull(identities, "identities");
         this.responder = new CommandResponder(plugin, feedback, logger);
@@ -604,18 +613,27 @@ public final class PointsCommands implements AutoCloseable {
         db.thenAccept(snapshot -> {
             this.responder.send(sender, "admin-status-header", MessageArguments.builder().unparsed("state", this.stateSupplier.get().name()).build());
             statusLine(sender, "configuration", Long.toString(this.snapshotSupplier.get().revision()));
+            statusLine(sender, "integrations", this.integrationStatusSupplier.get());
             statusLine(sender, "mysql", snapshot.databaseHealthy() ? "healthy " + snapshot.probeLatency().toMillis() + "ms" : "unhealthy");
             statusLine(sender, "schema", snapshot.schemaVersion().orElse("unknown"));
+            this.databaseStatusSupplier.get().ifPresent(status -> {
+                statusLine(sender, "mysql monitor", "running=" + status.running() + " interval=" + status.intervalSeconds() + "s");
+                status.lastSuccess().ifPresent(success -> statusLine(sender, "mysql last success", success.toString()));
+                status.lastFailure().ifPresent(failure -> statusLine(sender, "mysql last failure", failure));
+            });
             Optional<RedisSyncStatus> redis = this.redisStatusSupplier.get();
             statusLine(sender, "redis", redis.map(value -> value.redis().state().name()).orElse("unavailable"));
             redis.ifPresent(value -> {
                 statusLine(sender, "redis subscriptions", value.redis().activeSubscriptions() + "/" + value.redis().requestedSubscriptions());
                 statusLine(sender, "reconciliation", value.reconciliationRunning() + " interval=" + value.effectiveIntervalSeconds() + "s");
+                value.lastReconciliationAttempt().ifPresent(attempt -> statusLine(sender, "reconciliation last attempt", attempt.toString()));
+                value.lastSuccessfulReconciliation().ifPresent(success -> statusLine(sender, "reconciliation last success", success.toString()));
                 statusLine(sender, "redis failed publications", Long.toString(value.failedPublications()));
                 statusLine(sender, "redis invalid payloads", Long.toString(value.invalidPayloads()));
             });
             CacheStats stats = this.balanceStore.stats();
             statusLine(sender, "cache size", Long.toString(this.balanceStore.estimatedSize()));
+            statusLine(sender, "cache physical loads", Long.toString(this.balanceStore.inFlightLoads()));
             statusLine(sender, "cache hit rate", String.format(java.util.Locale.ROOT, "%.2f", stats.hitRate()));
             InFlightCounts counts = this.inFlightTracker.counts();
             statusLine(sender, "in flight", "loads=" + counts.loads() + " mutations=" + counts.mutations());
@@ -663,6 +681,7 @@ public final class PointsCommands implements AutoCloseable {
 
     @Override
     public void close() {
+        if (!this.closed.compareAndSet(false, true)) return;
         if (this.cleanupTask != null) this.cleanupTask.cancel();
         this.suggestions.close();
     }

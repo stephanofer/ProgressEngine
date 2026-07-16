@@ -507,13 +507,13 @@ Se aplican estas reglas durante todo el plan:
 
 **El bloque se considera terminado cuando:**
 
-- [ ] El servicio público nunca es visible antes de migraciones e inicialización completa.
-- [ ] La ausencia de una dependencia requerida impide publicar el runtime.
-- [ ] Shutdown no acepta mutaciones nuevas y trata correctamente las ya enviadas.
-- [ ] MySQL caído falla cerrado; Redis caído degrada sin pérdida económica.
-- [ ] No queda feedback temporal, suscripción, caché o executor propio sin cerrar.
+- [x] El servicio público nunca es visible antes de migraciones e inicialización completa.
+- [x] La ausencia de una dependencia requerida impide publicar el runtime.
+- [x] Shutdown no acepta mutaciones nuevas y trata correctamente las ya enviadas.
+- [x] MySQL caído falla cerrado; Redis caído degrada sin pérdida económica.
+- [x] No queda feedback temporal, suscripción, caché o executor propio sin cerrar.
 
-**Constancia de cierre:** [ ] Terminado | Fecha: __________ | 
+**Constancia de cierre:** [x] Terminado | Fecha: 7/16/26 |
 
 ## Bloque 14: Verificación integral y cierre de 1.0
 

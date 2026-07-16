@@ -210,7 +210,8 @@ public final class BoostedYamlConfigurationLoader implements ConfigurationLoader
         "feedback",
         "feedback.award-coalescing-window-ticks",
         "runtime",
-        "runtime.shutdown-timeout-seconds"
+        "runtime.shutdown-timeout-seconds",
+        "runtime.database-health-interval-seconds"
     );
 
     private final Path dataDirectory;
@@ -421,6 +422,7 @@ public final class BoostedYamlConfigurationLoader implements ConfigurationLoader
         boolean networkBoosters = reader.bool("integrations.network-boosters-enabled", true);
         boolean placeholderApi = reader.bool("integrations.placeholder-api-enabled", true);
         long runtimeShutdown = reader.longRange("runtime.shutdown-timeout-seconds", 1L, 60L, 10L);
+        long databaseHealthInterval = reader.longRange("runtime.database-health-interval-seconds", 1L, 300L, 10L);
 
         return new ProgressEngineConfig(
             serverId,
@@ -463,7 +465,7 @@ public final class BoostedYamlConfigurationLoader implements ConfigurationLoader
             new CacheSettings(cacheMaximumSize, expireAfterAccess, recordStats),
             new ReconciliationSettings(normalInterval, degradedInterval, batchSize),
             new IntegrationSettings(networkBoosters, placeholderApi),
-            new RuntimeSettings(runtimeShutdown)
+            new RuntimeSettings(runtimeShutdown, databaseHealthInterval)
         );
     }
 

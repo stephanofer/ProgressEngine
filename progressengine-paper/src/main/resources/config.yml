@@ -68,3 +68,4 @@ feedback:
 
 runtime:
   shutdown-timeout-seconds: 10
+  database-health-interval-seconds: 10

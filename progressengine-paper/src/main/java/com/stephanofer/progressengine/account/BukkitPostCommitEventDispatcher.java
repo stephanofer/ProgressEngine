@@ -5,6 +5,7 @@ import com.stephanofer.progressengine.api.event.PointsBalanceChangedEvent;
 import com.stephanofer.progressengine.api.event.PointsTransactionCommittedEvent;
 import com.stephanofer.progressengine.api.transaction.BalanceChange;
 import com.stephanofer.progressengine.api.transaction.OperationReceipt;
+import com.stephanofer.progressengine.lifecycle.PaperDispatchGate;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
@@ -16,10 +17,16 @@ import org.bukkit.plugin.java.JavaPlugin;
 public final class BukkitPostCommitEventDispatcher implements PostCommitEventDispatcher {
     private final JavaPlugin plugin;
     private final Logger logger;
+    private final PaperDispatchGate gate;
 
     public BukkitPostCommitEventDispatcher(JavaPlugin plugin, Logger logger) {
+        this(plugin, logger, new PaperDispatchGate());
+    }
+
+    public BukkitPostCommitEventDispatcher(JavaPlugin plugin, Logger logger, PaperDispatchGate gate) {
         this.plugin = Objects.requireNonNull(plugin, "plugin");
         this.logger = Objects.requireNonNull(logger, "logger");
+        this.gate = Objects.requireNonNull(gate, "gate");
     }
 
     @Override
@@ -27,8 +34,15 @@ public final class BukkitPostCommitEventDispatcher implements PostCommitEventDis
         Objects.requireNonNull(receipt, "receipt");
         Objects.requireNonNull(acceptedBalanceChanges, "acceptedBalanceChanges");
         CompletableFuture<Void> result = new CompletableFuture<>();
+        if (!this.gate.acceptsDispatch()) {
+            result.complete(null);
+            return result;
+        }
         Runnable task = () -> {
             try {
+                if (!this.gate.acceptsDispatch()) {
+                    return;
+                }
                 callSafely(new PointsTransactionCommittedEvent(receipt));
                 for (BalanceChange change : acceptedBalanceChanges) {
                     callSafely(new PointsBalanceChangedEvent(change, BalanceChangeOrigin.LOCAL, receipt.operationId()));

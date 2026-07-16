@@ -40,6 +40,10 @@ final class RuntimeLifecycleTest {
         mutation.close();
         assertEquals(0, tracker.counts().mutations());
 
+        lifecycle.transitionTo(RuntimeState.UNAVAILABLE_DATABASE);
+        assertTrue(tracker.acquire(WorkKind.LOAD).isEmpty());
+        assertTrue(tracker.acquire(WorkKind.MUTATION).isEmpty());
+
         lifecycle.transitionTo(RuntimeState.SHUTTING_DOWN);
         assertTrue(tracker.acquire(WorkKind.LOAD).isEmpty());
         assertTrue(tracker.acquire(WorkKind.MUTATION).isEmpty());
@@ -78,5 +82,16 @@ final class RuntimeLifecycleTest {
 
         RuntimeException exception = assertThrows(RuntimeException.class, failing::close);
         assertEquals(1, exception.getSuppressed().length);
+    }
+
+    @Test
+    void paperDispatchGateStopsNewDispatchesIdempotently() {
+        PaperDispatchGate gate = new PaperDispatchGate();
+
+        assertTrue(gate.acceptsDispatch());
+        gate.close();
+        gate.close();
+
+        assertFalse(gate.acceptsDispatch());
     }
 }

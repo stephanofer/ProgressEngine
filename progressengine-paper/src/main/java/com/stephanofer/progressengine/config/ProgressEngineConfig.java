@@ -124,7 +124,7 @@ public record ProgressEngineConfig(
     public record IntegrationSettings(boolean networkBoostersEnabled, boolean placeholderApiEnabled) {
     }
 
-    public record RuntimeSettings(long shutdownTimeoutSeconds) {
+    public record RuntimeSettings(long shutdownTimeoutSeconds, long databaseHealthIntervalSeconds) {
     }
 
     private static String requireText(String value, String name) {

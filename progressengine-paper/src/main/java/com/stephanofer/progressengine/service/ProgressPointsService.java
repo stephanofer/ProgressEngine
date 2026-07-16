@@ -10,6 +10,7 @@ import com.stephanofer.progressengine.lifecycle.InFlightTracker;
 import com.stephanofer.progressengine.lifecycle.PlayerReadiness;
 import java.util.Objects;
 import java.util.function.Supplier;
+import java.util.logging.Logger;
 import org.bukkit.plugin.Plugin;
 
 public final class ProgressPointsService implements PointsService {
@@ -19,16 +20,18 @@ public final class ProgressPointsService implements PointsService {
     private final InFlightTracker inFlightTracker;
     private final PlayerReadiness playerReadiness;
     private final Supplier<ProgressEngineConfig> configSupplier;
+    private final MutationFailureLogger failureLogger;
 
     public ProgressPointsService(BalanceStore balanceStore, AccountEconomy accountEconomy, AwardCoordinator awardCoordinator,
-                                  InFlightTracker inFlightTracker, PlayerReadiness playerReadiness,
-                                  Supplier<ProgressEngineConfig> configSupplier) {
+                                   InFlightTracker inFlightTracker, PlayerReadiness playerReadiness,
+                                   Supplier<ProgressEngineConfig> configSupplier, Logger logger) {
         this.balanceStore = Objects.requireNonNull(balanceStore, "balanceStore");
         this.accountEconomy = Objects.requireNonNull(accountEconomy, "accountEconomy");
         this.awardCoordinator = Objects.requireNonNull(awardCoordinator, "awardCoordinator");
         this.inFlightTracker = Objects.requireNonNull(inFlightTracker, "inFlightTracker");
         this.playerReadiness = Objects.requireNonNull(playerReadiness, "playerReadiness");
         this.configSupplier = Objects.requireNonNull(configSupplier, "configSupplier");
+        this.failureLogger = new MutationFailureLogger(logger);
     }
 
     @Override
@@ -41,7 +44,8 @@ public final class ProgressPointsService implements PointsService {
             this.awardCoordinator,
             this.inFlightTracker,
             this.playerReadiness,
-            this.configSupplier
+            this.configSupplier,
+            this.failureLogger
         );
     }
 }

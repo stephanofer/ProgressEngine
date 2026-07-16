@@ -125,7 +125,7 @@ final class ConfigurationManagerTest {
             new ProgressEngineConfig.CacheSettings(10_000, 1_800, true),
             new ProgressEngineConfig.ReconciliationSettings(60, 10, 200),
             new ProgressEngineConfig.IntegrationSettings(true, true),
-            new ProgressEngineConfig.RuntimeSettings(10)
+            new ProgressEngineConfig.RuntimeSettings(10, 10)
         );
         return new ConfigurationSnapshot(revision, Instant.EPOCH, config);
     }

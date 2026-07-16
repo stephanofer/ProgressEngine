@@ -8,6 +8,7 @@ import com.stephanofer.progressengine.account.BalanceStore;
 import com.stephanofer.progressengine.account.BukkitPostCommitEventDispatcher;
 import com.stephanofer.progressengine.account.PostCommitPublisher;
 import com.stephanofer.progressengine.account.PostCommitNetworkPublisher;
+import com.stephanofer.progressengine.api.PointsService;
 import com.stephanofer.progressengine.api.source.OperationSource;
 import com.stephanofer.progressengine.award.AwardCoordinator;
 import com.stephanofer.progressengine.award.BukkitAwardPrepareEventDispatcher;
@@ -27,8 +28,10 @@ import com.stephanofer.progressengine.feedback.FeedbackService;
 import com.stephanofer.progressengine.identity.IdentityInvalidationListener;
 import com.stephanofer.progressengine.identity.PlayerIdentityRenderer;
 import com.stephanofer.progressengine.lifecycle.BukkitPlayerLifecycleListener;
+import com.stephanofer.progressengine.lifecycle.DatabaseHealthMonitor;
 import com.stephanofer.progressengine.lifecycle.InFlightTracker;
 import com.stephanofer.progressengine.lifecycle.LifecycleResources;
+import com.stephanofer.progressengine.lifecycle.PaperDispatchGate;
 import com.stephanofer.progressengine.lifecycle.PlayerLifecycleCoordinator;
 import com.stephanofer.progressengine.lifecycle.RuntimeLifecycle;
 import com.stephanofer.progressengine.lifecycle.RuntimeState;
@@ -55,6 +58,7 @@ import java.util.logging.Level;
 import org.bukkit.Bukkit;
 import org.bukkit.event.HandlerList;
 import org.bukkit.plugin.RegisteredServiceProvider;
+import org.bukkit.plugin.ServicePriority;
 import org.bukkit.plugin.java.JavaPlugin;
 import net.luckperms.api.LuckPerms;
 import org.incendo.cloud.paper.PaperCommandManager;
@@ -67,7 +71,11 @@ public final class ProgressEngineRuntime implements AutoCloseable {
     private final InFlightTracker inFlightTracker;
     private final LifecycleResources resources;
     private final ConfigurationManager configurationManager;
+    private final PaperDispatchGate dispatchGate;
     private final AtomicBoolean shutdownStarted = new AtomicBoolean();
+    private final AtomicBoolean databaseAvailable = new AtomicBoolean(true);
+    private final AtomicBoolean redisAvailable = new AtomicBoolean(false);
+    private final AtomicBoolean servicePublished = new AtomicBoolean(false);
     private final AtomicReference<ProgressPersistence> persistence = new AtomicReference<>();
     private final AtomicReference<BalanceStore> balanceStore = new AtomicReference<>();
     private final AtomicReference<AccountEconomy> accountEconomy = new AtomicReference<>();
@@ -78,6 +86,9 @@ public final class ProgressEngineRuntime implements AutoCloseable {
     private final AtomicReference<FeedbackService> feedbackService = new AtomicReference<>();
     private final AtomicReference<RedisSyncCoordinator> redisSync = new AtomicReference<>();
     private final AtomicReference<PointsCommands> commands = new AtomicReference<>();
+    private final AtomicReference<ProgressEnginePlaceholderExpansion> placeholderExpansion = new AtomicReference<>();
+    private final AtomicReference<DatabaseHealthMonitor> databaseHealthMonitor = new AtomicReference<>();
+    private final AtomicReference<String> integrationStatus = new AtomicReference<>("networkBoosters=unknown placeholderApi=unknown");
 
     private ProgressEngineRuntime(
         JavaPlugin plugin,
@@ -93,6 +104,7 @@ public final class ProgressEngineRuntime implements AutoCloseable {
         this.inFlightTracker = Objects.requireNonNull(inFlightTracker, "inFlightTracker");
         this.resources = Objects.requireNonNull(resources, "resources");
         this.configurationManager = Objects.requireNonNull(configurationManager, "configurationManager");
+        this.dispatchGate = new PaperDispatchGate();
         this.resources.register("configuration-manager", this.configurationManager);
     }
 
@@ -219,6 +231,16 @@ public final class ProgressEngineRuntime implements AutoCloseable {
             this.lifecycle.transitionTo(RuntimeState.SHUTTING_DOWN);
         }
 
+        unregisterPointsService();
+        this.dispatchGate.close();
+        closeReference(this.placeholderExpansion, "placeholder-expansion");
+        closeReference(this.commands, "commands");
+        closeReference(this.playerLifecycle, "player-lifecycle");
+        RedisSyncCoordinator redis = this.redisSync.get();
+        if (redis != null) {
+            redis.quiesce();
+        }
+        closeReference(this.databaseHealthMonitor, "database-health-monitor");
         this.configurationManager.close();
         try {
             long timeoutSeconds = this.configurationManager.activeSnapshot()
@@ -241,6 +263,18 @@ public final class ProgressEngineRuntime implements AutoCloseable {
             if (this.lifecycle.state() != RuntimeState.CLOSED) {
                 this.lifecycle.transitionTo(RuntimeState.CLOSED);
             }
+        }
+    }
+
+    private <T extends AutoCloseable> void closeReference(AtomicReference<T> reference, String name) {
+        T value = reference.getAndSet(null);
+        if (value == null) {
+            return;
+        }
+        try {
+            value.close();
+        } catch (Exception exception) {
+            this.plugin.getLogger().log(Level.WARNING, "ProgressEngine failed to close " + name + " during shutdown", exception);
         }
     }
 
@@ -297,11 +331,12 @@ public final class ProgressEngineRuntime implements AutoCloseable {
             return;
         }
 
+        validateCacheCapacity(snapshot.config());
         BalanceStore store = new BalanceStore(persistence, snapshot.config().cache(), this.inFlightTracker, Clock.systemUTC());
         AtomicReference<PostCommitNetworkPublisher> networkPublisher = new AtomicReference<>(PostCommitNetworkPublisher.noop());
         PostCommitPublisher postCommitPublisher = new PostCommitPublisher(
             store,
-            new BukkitPostCommitEventDispatcher(this.plugin, this.plugin.getLogger()),
+            new BukkitPostCommitEventDispatcher(this.plugin, this.plugin.getLogger(), this.dispatchGate),
             receipt -> networkPublisher.get().publish(receipt),
             this.plugin.getLogger()
         );
@@ -333,7 +368,8 @@ public final class ProgressEngineRuntime implements AutoCloseable {
             localizedMessages,
             bossBars,
             this::activeSnapshot,
-            this.plugin.getLogger()
+            this.plugin.getLogger(),
+            this.dispatchGate
         );
         AwardFeedbackCoalescer awardFeedbackCoalescer = new AwardFeedbackCoalescer(
             this.plugin,
@@ -344,9 +380,10 @@ public final class ProgressEngineRuntime implements AutoCloseable {
         AwardFeedbackListener awardFeedbackListener = new AwardFeedbackListener(awardFeedbackCoalescer);
         IdentityInvalidationListener identityInvalidationListener = new IdentityInvalidationListener(this.plugin, luckPerms, identityRenderer);
         NetworkBoostersIntegration boostersIntegration = resolveNetworkBoosters(snapshot);
+        this.integrationStatus.set("networkBoosters=" + boostersIntegration.status() + " placeholderApi=pending");
         AwardCoordinator awardCoordinator = new AwardCoordinator(
             economy,
-            new BukkitAwardPrepareEventDispatcher(this.plugin, this.plugin.getLogger()),
+            new BukkitAwardPrepareEventDispatcher(this.plugin, this.plugin.getLogger(), this.dispatchGate),
             boostersIntegration.awardCalculator(),
             this::activeConfig
         );
@@ -377,7 +414,8 @@ public final class ProgressEngineRuntime implements AutoCloseable {
             awardCoordinator,
             this.inFlightTracker,
             lifecycleCoordinator,
-            this::activeConfig
+            this::activeConfig,
+            this.plugin.getLogger()
         );
         if (!this.balanceStore.compareAndSet(null, store)) {
             store.close();
@@ -421,7 +459,7 @@ public final class ProgressEngineRuntime implements AutoCloseable {
             redis = ProgressRedisFactory.create(snapshot.config());
             RemoteBalanceRefresher remoteRefresher = new RemoteBalanceRefresher(
                 store,
-                new BukkitRemoteBalanceEventDispatcher(this.plugin, this.plugin.getLogger()),
+                new BukkitRemoteBalanceEventDispatcher(this.plugin, this.plugin.getLogger(), this.dispatchGate),
                 this.plugin.getLogger()
             );
             BalanceReconciler reconciler = new BalanceReconciler(
@@ -435,7 +473,6 @@ public final class ProgressEngineRuntime implements AutoCloseable {
             );
             redisCoordinator = new RedisSyncCoordinator(
                 redis,
-                this.lifecycle,
                 this.inFlightTracker,
                 new RedisMessageCodec(),
                 remoteRefresher,
@@ -446,6 +483,7 @@ public final class ProgressEngineRuntime implements AutoCloseable {
                 identityRenderer,
                 this::activeConfig,
                 this::scheduleDelayed,
+                this::handleRedisOperational,
                 this.plugin.getLogger(),
                 Clock.systemUTC()
             );
@@ -490,6 +528,7 @@ public final class ProgressEngineRuntime implements AutoCloseable {
         this.resources.register("player-lifecycle-listener", () -> HandlerList.unregisterAll(listener));
         processAlreadyOnlinePlayers(playerSettings, lifecycleCoordinator);
         redisCoordinator.activate();
+        startDatabaseHealthMonitor(persistence);
         PointsCommands commands = new PointsCommands(
             this.plugin,
             this.commandManager,
@@ -501,6 +540,8 @@ public final class ProgressEngineRuntime implements AutoCloseable {
             this.lifecycle::state,
             this::activeSnapshot,
             () -> java.util.Optional.ofNullable(this.redisSync.get()).map(RedisSyncCoordinator::status),
+            () -> java.util.Optional.ofNullable(this.databaseHealthMonitor.get()).map(DatabaseHealthMonitor::status),
+            this.integrationStatus::get,
             localizedMessages,
             identityRenderer,
             feedbackService,
@@ -513,12 +554,21 @@ public final class ProgressEngineRuntime implements AutoCloseable {
             throw new IllegalStateException("ProgressEngine commands were already initialized");
         }
         this.resources.register("commands", commands);
-        registerPlaceholderExpansion(lifecycleCoordinator, store, playerSettings);
-        this.plugin.getLogger().info("ProgressEngine economic runtime initialized with commands and optional integrations. Public service remains hidden until later blocks are complete.");
+        registerPlaceholderExpansion(lifecycleCoordinator, store, playerSettings, snapshot.config());
+        this.integrationStatus.set("networkBoosters=" + boostersIntegration.status()
+            + " placeholderApi=" + (this.placeholderExpansion.get() != null ? "REGISTERED" : "DISABLED_OR_ABSENT"));
+        registerPointsService(service);
+        this.plugin.getLogger().info("ProgressEngine economic runtime initialized. state=" + this.lifecycle.state()
+            + ", networkBoosters=" + boostersIntegration.status()
+            + ", placeholderApi=" + (this.placeholderExpansion.get() != null ? "registered" : "disabled"));
     }
 
     private void registerPlaceholderExpansion(PlayerLifecycleCoordinator lifecycleCoordinator, BalanceStore store,
-                                              PlayerSettingsService playerSettings) {
+                                              PlayerSettingsService playerSettings, ProgressEngineConfig config) {
+        if (!config.integrations().placeholderApiEnabled()) {
+            this.plugin.getLogger().info("PlaceholderAPI integration is disabled in ProgressEngine configuration.");
+            return;
+        }
         if (!this.plugin.getServer().getPluginManager().isPluginEnabled("PlaceholderAPI")) {
             this.plugin.getLogger().info("PlaceholderAPI is not installed; ProgressEngine placeholders remain disabled.");
             return;
@@ -526,8 +576,7 @@ public final class ProgressEngineRuntime implements AutoCloseable {
         try {
             String identifier = ProgressEnginePlaceholderExpansion.identifier();
             if (me.clip.placeholderapi.PlaceholderAPI.isRegistered(identifier)) {
-                this.plugin.getLogger().severe("ProgressEngine PlaceholderAPI expansion identifier is already registered: " + identifier);
-                return;
+                throw new IllegalStateException("ProgressEngine PlaceholderAPI expansion identifier is already registered: " + identifier);
             }
             ProgressEnginePlaceholderExpansion expansion = new ProgressEnginePlaceholderExpansion(
                 this.plugin,
@@ -538,13 +587,16 @@ public final class ProgressEngineRuntime implements AutoCloseable {
             seedPlaceholderLanguages(expansion, playerSettings);
             if (!expansion.register()) {
                 expansion.close();
-                this.plugin.getLogger().severe("ProgressEngine could not register its PlaceholderAPI expansion.");
-                return;
+                throw new IllegalStateException("ProgressEngine could not register its PlaceholderAPI expansion");
+            }
+            if (!this.placeholderExpansion.compareAndSet(null, expansion)) {
+                expansion.close();
+                throw new IllegalStateException("ProgressEngine PlaceholderAPI expansion was already initialized");
             }
             this.resources.register("placeholder-expansion", expansion);
             this.plugin.getLogger().info("ProgressEngine PlaceholderAPI expansion registered.");
         } catch (LinkageError | RuntimeException exception) {
-            this.plugin.getLogger().log(Level.SEVERE, "ProgressEngine could not initialize PlaceholderAPI integration", exception);
+            throw new IllegalStateException("ProgressEngine could not initialize PlaceholderAPI integration", exception);
         }
     }
 
@@ -559,6 +611,92 @@ public final class ProgressEngineRuntime implements AutoCloseable {
                 this.plugin.getLogger().log(Level.WARNING, "ProgressEngine could not seed PlaceholderAPI language for "
                     + player.getUniqueId(), exception);
             }
+        }
+    }
+
+    private void startDatabaseHealthMonitor(ProgressPersistence persistence) {
+        DatabaseHealthMonitor monitor = new DatabaseHealthMonitor(
+            persistence,
+            () -> activeConfig().runtime().databaseHealthIntervalSeconds(),
+            this::scheduleDelayed,
+            this::handleDatabaseHealthUpdate,
+            this.plugin.getLogger(),
+            Clock.systemUTC()
+        );
+        if (!this.databaseHealthMonitor.compareAndSet(null, monitor)) {
+            monitor.close();
+            throw new IllegalStateException("ProgressEngine database health monitor was already initialized");
+        }
+        this.resources.register("database-health-monitor", monitor);
+        monitor.start();
+    }
+
+    private void registerPointsService(ProgressPointsService service) {
+        Objects.requireNonNull(service, "service");
+        RegisteredServiceProvider<PointsService> existing = this.plugin.getServer().getServicesManager().getRegistration(PointsService.class);
+        if (existing != null) {
+            throw new IllegalStateException("A PointsService provider is already registered by " + existing.getPlugin().getName());
+        }
+        if (!this.servicePublished.compareAndSet(false, true)) {
+            throw new IllegalStateException("ProgressEngine PointsService was already published");
+        }
+        try {
+            updateRuntimeAvailability();
+            this.plugin.getServer().getServicesManager().register(PointsService.class, service, this.plugin, ServicePriority.Normal);
+            this.resources.register("points-service", this::unregisterPointsService);
+        } catch (RuntimeException exception) {
+            this.servicePublished.set(false);
+            this.plugin.getServer().getServicesManager().unregister(PointsService.class, service);
+            throw exception;
+        }
+    }
+
+    private void unregisterPointsService() {
+        ProgressPointsService service = this.pointsService.get();
+        if (service == null || !this.servicePublished.compareAndSet(true, false)) {
+            return;
+        }
+        this.plugin.getServer().getServicesManager().unregister(PointsService.class, service);
+    }
+
+    private void handleRedisOperational(boolean operational) {
+        this.redisAvailable.set(operational);
+        updateRuntimeAvailability();
+    }
+
+    private void handleDatabaseHealthUpdate(DatabaseHealthMonitor.HealthUpdate update) {
+        boolean previous = this.databaseAvailable.getAndSet(update.healthy());
+        if (previous != update.healthy()) {
+            if (update.healthy()) {
+                this.plugin.getLogger().info("ProgressEngine MySQL health recovered.");
+            } else {
+                this.plugin.getLogger().warning("ProgressEngine MySQL health degraded: " + update.failureMessage().orElse("unknown"));
+            }
+        }
+        updateRuntimeAvailability();
+    }
+
+    private void updateRuntimeAvailability() {
+        if (!this.servicePublished.get()) {
+            return;
+        }
+        RuntimeState current = this.lifecycle.state();
+        if (current == RuntimeState.SHUTTING_DOWN || current == RuntimeState.CLOSED) {
+            return;
+        }
+        RuntimeState target = !this.databaseAvailable.get()
+            ? RuntimeState.UNAVAILABLE_DATABASE
+            : this.redisAvailable.get() ? RuntimeState.READY : RuntimeState.DEGRADED_REDIS;
+        if (current != target) {
+            this.lifecycle.transitionTo(target);
+            this.plugin.getLogger().info("ProgressEngine runtime state changed to " + target);
+        }
+    }
+
+    private void validateCacheCapacity(ProgressEngineConfig config) {
+        int maxPlayers = this.plugin.getServer().getMaxPlayers();
+        if (config.cache().maximumSize() < maxPlayers) {
+            throw new IllegalStateException("cache.maximum-size must be at least the configured max players (" + maxPlayers + ")");
         }
     }
 
@@ -601,12 +739,19 @@ public final class ProgressEngineRuntime implements AutoCloseable {
 
     private void runOnMainThread(Runnable task) {
         Objects.requireNonNull(task, "task");
+        if (!this.dispatchGate.acceptsDispatch()) {
+            return;
+        }
         if (Bukkit.isPrimaryThread()) {
             task.run();
             return;
         }
         try {
-            this.plugin.getServer().getScheduler().runTask(this.plugin, task);
+            this.plugin.getServer().getScheduler().runTask(this.plugin, () -> {
+                if (this.dispatchGate.acceptsDispatch()) {
+                    task.run();
+                }
+            });
         } catch (RuntimeException exception) {
             this.plugin.getLogger().log(Level.WARNING, "ProgressEngine could not schedule lifecycle work during shutdown", exception);
         }
@@ -631,6 +776,7 @@ public final class ProgressEngineRuntime implements AutoCloseable {
     }
 
     private void transitionDatabaseUnavailable() {
+        this.databaseAvailable.set(false);
         RuntimeState state = this.lifecycle.state();
         if (state != RuntimeState.SHUTTING_DOWN && state != RuntimeState.CLOSED && state != RuntimeState.UNAVAILABLE_DATABASE) {
             this.lifecycle.transitionTo(RuntimeState.UNAVAILABLE_DATABASE);

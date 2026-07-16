@@ -148,6 +148,32 @@ final class BalanceStoreTest {
         assertTrue(store.cached(playerId).isEmpty());
     }
 
+    @Test
+    void rejectsNewLoadsWhenDatabaseIsUnavailable() {
+        RuntimeLifecycle lifecycle = new RuntimeLifecycle();
+        lifecycle.transitionTo(RuntimeState.UNAVAILABLE_DATABASE);
+        UUID playerId = UUID.randomUUID();
+        BalanceStore store = store(
+            id -> CompletableFuture.completedFuture(account(id, 0L, 0L)),
+            settings(),
+            lifecycle,
+            Ticker.systemTicker()
+        );
+
+        assertThrows(CompletionException.class, () -> store.refresh(playerId).join());
+        assertTrue(store.cached(playerId).isEmpty());
+    }
+
+    @Test
+    void doesNotRepopulateCacheAfterClose() {
+        UUID playerId = UUID.randomUUID();
+        BalanceStore store = store(id -> CompletableFuture.completedFuture(account(id, 10L, 1L)));
+        store.close();
+
+        assertThrows(IllegalStateException.class, () -> store.publish(new BalanceSnapshot(playerId, 10L, 1L, CLOCK.instant())));
+        assertTrue(store.cached(playerId).isEmpty());
+    }
+
     private static BalanceStore store(BalanceStore.AccountSnapshotLoader loader) {
         return store(loader, settings(), new RuntimeLifecycle(), Ticker.systemTicker());
     }

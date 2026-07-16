@@ -14,8 +14,6 @@ import com.stephanofer.progressengine.config.ProgressEngineConfig;
 import com.stephanofer.progressengine.feedback.FeedbackService;
 import com.stephanofer.progressengine.identity.PlayerIdentityRenderer;
 import com.stephanofer.progressengine.lifecycle.InFlightTracker;
-import com.stephanofer.progressengine.lifecycle.RuntimeLifecycle;
-import com.stephanofer.progressengine.lifecycle.RuntimeState;
 import com.stephanofer.progressengine.lifecycle.WorkKind;
 import com.stephanofer.progressengine.lifecycle.WorkPermit;
 import com.stephanofer.progressengine.persistence.KnownPlayerName;
@@ -31,6 +29,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -38,7 +37,6 @@ import net.kyori.adventure.text.Component;
 
 public final class RedisSyncCoordinator implements PostCommitNetworkPublisher, AutoCloseable {
     private final RedisClient redis;
-    private final RuntimeLifecycle lifecycle;
     private final InFlightTracker inFlightTracker;
     private final RedisMessageCodec codec;
     private final RemoteBalanceRefresher remoteRefresher;
@@ -49,6 +47,7 @@ public final class RedisSyncCoordinator implements PostCommitNetworkPublisher, A
     private final PlayerIdentityRenderer identityRenderer;
     private final Supplier<ProgressEngineConfig> configSupplier;
     private final DelayedTaskScheduler delayedTaskScheduler;
+    private final Consumer<Boolean> operationalListener;
     private final Logger logger;
     private final Clock clock;
     private final String serverId;
@@ -70,7 +69,6 @@ public final class RedisSyncCoordinator implements PostCommitNetworkPublisher, A
 
     public RedisSyncCoordinator(
         RedisClient redis,
-        RuntimeLifecycle lifecycle,
         InFlightTracker inFlightTracker,
         RedisMessageCodec codec,
         RemoteBalanceRefresher remoteRefresher,
@@ -81,11 +79,11 @@ public final class RedisSyncCoordinator implements PostCommitNetworkPublisher, A
         PlayerIdentityRenderer identityRenderer,
         Supplier<ProgressEngineConfig> configSupplier,
         DelayedTaskScheduler delayedTaskScheduler,
+        Consumer<Boolean> operationalListener,
         Logger logger,
         Clock clock
     ) {
         this.redis = Objects.requireNonNull(redis, "redis");
-        this.lifecycle = Objects.requireNonNull(lifecycle, "lifecycle");
         this.inFlightTracker = Objects.requireNonNull(inFlightTracker, "inFlightTracker");
         this.codec = Objects.requireNonNull(codec, "codec");
         this.remoteRefresher = Objects.requireNonNull(remoteRefresher, "remoteRefresher");
@@ -96,6 +94,7 @@ public final class RedisSyncCoordinator implements PostCommitNetworkPublisher, A
         this.identityRenderer = Objects.requireNonNull(identityRenderer, "identityRenderer");
         this.configSupplier = Objects.requireNonNull(configSupplier, "configSupplier");
         this.delayedTaskScheduler = Objects.requireNonNull(delayedTaskScheduler, "delayedTaskScheduler");
+        this.operationalListener = Objects.requireNonNull(operationalListener, "operationalListener");
         this.logger = Objects.requireNonNull(logger, "logger");
         this.clock = Objects.requireNonNull(clock, "clock");
         this.serverId = configSupplier.get().serverId();
@@ -129,6 +128,13 @@ public final class RedisSyncCoordinator implements PostCommitNetworkPublisher, A
             this.failedPublications.get(),
             this.invalidPayloads.get()
         );
+    }
+
+    public void quiesce() {
+        if (!this.active.getAndSet(false)) {
+            return;
+        }
+        cancelScheduledReconciliation();
     }
 
     @Override
@@ -170,6 +176,7 @@ public final class RedisSyncCoordinator implements PostCommitNetworkPublisher, A
         if (!this.closed.compareAndSet(false, true)) {
             return;
         }
+        quiesce();
         cancelScheduledReconciliation();
         this.statusRegistration.close();
         this.invalidationSubscription.close();
@@ -262,9 +269,9 @@ public final class RedisSyncCoordinator implements PostCommitNetworkPublisher, A
         runReconciliation().whenComplete((result, failure) -> {
             if (failure == null && result != null && !this.closed.get() && this.redis.operationalStatus().isOperational()
                 && this.recoveryGeneration.get() == generation) {
-                transitionToReady();
+                reportOperational(true);
             } else if (failure != null) {
-                transitionToDegraded();
+                reportOperational(false);
             }
             scheduleNextReconciliation();
         });
@@ -327,17 +334,15 @@ public final class RedisSyncCoordinator implements PostCommitNetworkPublisher, A
     }
 
     private void transitionToReady() {
-        RuntimeState state = this.lifecycle.state();
-        if (state == RuntimeState.STARTING || state == RuntimeState.DEGRADED_REDIS) {
-            this.lifecycle.transitionTo(RuntimeState.READY);
-        }
+        reportOperational(true);
     }
 
     private void transitionToDegraded() {
-        RuntimeState state = this.lifecycle.state();
-        if (state == RuntimeState.STARTING || state == RuntimeState.READY) {
-            this.lifecycle.transitionTo(RuntimeState.DEGRADED_REDIS);
-        }
+        reportOperational(false);
+    }
+
+    private void reportOperational(boolean operational) {
+        this.operationalListener.accept(operational);
     }
 
     private static Optional<BalanceChange> receiverChange(OperationReceipt receipt) {

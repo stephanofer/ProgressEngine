@@ -40,7 +40,7 @@ public final class RuntimeLifecycle {
         if (kind == WorkKind.MUTATION) {
             return current == RuntimeState.READY || current == RuntimeState.DEGRADED_REDIS;
         }
-        return true;
+        return current != RuntimeState.UNAVAILABLE_DATABASE;
     }
 
     private static Map<RuntimeState, Set<RuntimeState>> transitions() {

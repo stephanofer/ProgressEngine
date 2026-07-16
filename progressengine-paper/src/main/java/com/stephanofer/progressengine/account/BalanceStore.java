@@ -97,6 +97,9 @@ public final class BalanceStore implements AutoCloseable {
 
     public Publication publish(BalanceSnapshot incoming) {
         Objects.requireNonNull(incoming, "incoming");
+        if (this.closed.get()) {
+            throw new IllegalStateException("Balance store is closed");
+        }
         AtomicReference<BalanceSnapshot> previous = new AtomicReference<>();
         AtomicReference<BalanceSnapshot> effective = new AtomicReference<>();
         AtomicBoolean updated = new AtomicBoolean();
