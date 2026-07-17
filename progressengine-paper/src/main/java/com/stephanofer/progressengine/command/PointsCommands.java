@@ -205,8 +205,9 @@ public final class PointsCommands implements PointsCommandExecutor, AutoCloseabl
     private void sendBalance(CommandSender sender, String key, BalanceSnapshot snapshot, Component target) {
         String language = consoleLanguage();
         MessageArguments.Builder args = MessageArguments.builder()
-            .unparsed("balance", this.messages.formatted(snapshot.balance(), language))
+            .component("balance", this.messages.styled(snapshot.balance(), language))
             .unparsed("balance_raw", this.messages.raw(snapshot.balance()))
+            .unparsed("balance_formatted", this.messages.formatted(snapshot.balance(), language))
             .unparsed("balance_compact", this.messages.compact(snapshot.balance(), language));
         if (!target.equals(Component.empty())) args.component("target", target);
         this.responder.send(sender, key, args.build());
@@ -226,15 +227,18 @@ public final class PointsCommands implements PointsCommandExecutor, AutoCloseabl
         String rawAmount = context.get("amount");
         long amount;
         try {
-            amount = CommandParsers.positiveAmount(rawAmount, settings().pay().maximum());
+            amount = CommandParsers.positiveAmount(rawAmount, settings().pay().maximum(), settings().amountInput().multipliers());
         } catch (IllegalArgumentException exception) {
             this.responder.send(sender, "invalid-amount", MessageArguments.builder().unparsed("input", rawAmount).build());
             return;
         }
         CommandSettings.Pay pay = settings().pay();
         if (amount < pay.minimum() || amount > pay.maximum()) {
+            String language = consoleLanguage();
             this.responder.send(sender, "pay-range", MessageArguments.builder()
-                .unparsed("minimum", Long.toString(pay.minimum())).unparsed("maximum", Long.toString(pay.maximum())).build());
+                .component("minimum", this.messages.styled(pay.minimum(), language))
+                .component("maximum", this.messages.styled(pay.maximum(), language))
+                .build());
             return;
         }
         String rawTarget = context.get("target");
@@ -263,11 +267,38 @@ public final class PointsCommands implements PointsCommandExecutor, AutoCloseabl
                     settings().reasons().playerTransfer(), Optional.of(observed.revision()),
                     needsConfirmation ? CommandIntentState.AWAITING_CONFIRMATION : CommandIntentState.SUBMITTED)
                     .thenCompose(created -> needsConfirmation
-                        ? identity(resolved).thenAccept(identity -> this.responder.send(sender, "pay-confirm-required", MessageArguments.builder()
-                            .unparsed("amount", Long.toString(amount)).component("target", identity).unparsed("token", created.token()).build()))
+                        ? identity(resolved).thenAccept(identity -> openPayConfirmation(player, created, identity))
                         : executeIntent(sender, created.intent(), created.token()));
             });
         }).exceptionally(failure -> infrastructure(sender, failure));
+    }
+
+    private void openPayConfirmation(Player player, CreatedIntent created, Component receiver) {
+        if (!player.isOnline() || this.closed.get()) return;
+        long amount = created.intent().amount();
+        String language = consoleLanguage();
+        BalanceSnapshot balance = this.points.cached(player.getUniqueId()).orElse(null);
+        if (balance == null || balance.revision() != created.intent().observedRevision().orElse(-1L)) {
+            this.responder.send(player, "pay-token-stale");
+            return;
+        }
+        long after = balance.balance() >= amount ? balance.balance() - amount : 0L;
+        this.plugin.getServer().getScheduler().runTask(this.plugin, () -> {
+            if (!player.isOnline() || this.closed.get()) return;
+            try {
+                PayConfirmationDialog.show(player, this.snapshotSupplier.get().payDialog(), language, receiver, this.messages.styled(amount, language),
+                    this.messages.display(amount, language), this.messages.display(after, language),
+                    settings().pay().confirmation().expirySeconds(),
+                    () -> submitToken(player, created.token(), CommandIntentType.PAY, Optional.of(player.getUniqueId()), true));
+            } catch (RuntimeException exception) {
+                this.logger.log(Level.WARNING, "ProgressEngine could not open pay confirmation dialog", exception);
+                this.responder.send(player, "pay-confirm-required", MessageArguments.builder()
+                    .component("amount", this.messages.styled(amount, language))
+                    .component("target", receiver)
+                    .unparsed("token", created.token())
+                    .build());
+            }
+        });
     }
 
     private void confirmPay(CommandContext<Source> context, boolean retry) {
@@ -344,7 +375,8 @@ public final class PointsCommands implements PointsCommandExecutor, AutoCloseabl
     private CompletableFuture<Void> executeIntent(CommandSender sender, CommandIntent intent, String token) {
         CompletableFuture<?> result = switch (intent.type()) {
             case PAY -> this.points.transfer(new TransferRequest(intent.operationId(), intent.playerId(), intent.targetId().orElseThrow(),
-                intent.amount(), intent.reason(), intent.actor(), metadata("pay")));
+                intent.amount(), intent.reason(), intent.actor(), metadata("pay"), intent.observedRevision().isPresent()
+                    ? java.util.OptionalLong.of(intent.observedRevision().orElseThrow()) : java.util.OptionalLong.empty()));
             case ADMIN_ADD -> this.points.credit(new CreditRequest(intent.operationId(), intent.playerId(), intent.amount(), intent.reason(), intent.actor(), metadata("admin_add")));
             case ADMIN_REMOVE -> this.points.debit(new DebitRequest(intent.operationId(), intent.playerId(), intent.amount(), intent.reason(), intent.actor(), metadata("admin_remove")));
             case ADMIN_SET -> this.points.setBalance(new SetBalanceRequest(intent.operationId(), intent.playerId(), intent.amount(), intent.reason(), intent.actor(), metadata("admin_set")));
@@ -365,15 +397,22 @@ public final class PointsCommands implements PointsCommandExecutor, AutoCloseabl
             return this.persistence.playerNames().findByPlayerId(intent.targetId().orElseThrow())
                 .thenCompose(name -> this.identities.renderOffline(intent.targetId().orElseThrow(), name.map(com.stephanofer.progressengine.persistence.KnownPlayerName::username)))
                 .thenAccept(target -> this.responder.send(sender, "pay-success-sender", balanceArgs(senderSnapshot.balance()).component("target", target)
-                    .unparsed("amount", Long.toString(intent.amount())).build()));
+                    .component("amount", this.messages.styled(intent.amount(), consoleLanguage())).build()));
         }
         if (value instanceof TransferResult.InsufficientFunds) {
             return this.points.refresh(intent.playerId()).thenAccept(snapshot -> this.responder.send(sender, "pay-insufficient-funds",
-                balanceArgs(snapshot.balance()).unparsed("amount", Long.toString(intent.amount())).build()));
+                balanceArgs(snapshot.balance()).component("amount", this.messages.styled(intent.amount(), consoleLanguage())).build()));
         }
         if (value instanceof TransferResult.BalanceLimitExceeded) {
             return identity(new ResolvedTarget(intent.targetId().orElseThrow(), Optional.empty())).thenAccept(target -> this.responder.send(sender, "pay-balance-limit",
-                MessageArguments.builder().component("target", target).unparsed("amount", Long.toString(intent.amount())).build()));
+                MessageArguments.builder()
+                    .component("target", target)
+                    .component("amount", this.messages.styled(intent.amount(), consoleLanguage()))
+                    .build()));
+        }
+        if (value instanceof TransferResult.StaleConfirmation) {
+            this.responder.send(sender, "pay-token-stale");
+            return CompletableFuture.completedFuture(null);
         }
         if (value instanceof CreditResult.Success success) return adminSuccess(sender, "admin-add-success", success.receipt().changes().get(0).balanceAfter(), intent);
         if (value instanceof DebitResult.Success success) return adminSuccess(sender, "admin-remove-success", success.receipt().changes().get(0).balanceAfter(), intent);
@@ -385,7 +424,10 @@ public final class PointsCommands implements PointsCommandExecutor, AutoCloseabl
 
     private CompletableFuture<Void> adminSuccess(CommandSender sender, String key, long balance, CommandIntent intent) {
         return identity(new ResolvedTarget(intent.playerId(), Optional.empty())).thenAccept(target -> this.responder.send(sender, key,
-            balanceArgs(balance).component("target", target).unparsed("amount", Long.toString(intent.amount())).build()));
+            balanceArgs(balance)
+                .component("target", target)
+                .component("amount", this.messages.styled(intent.amount(), consoleLanguage()))
+                .build()));
     }
 
     private BalanceSnapshot snapshotFor(UUID playerId, long balance, long revision) {
@@ -399,8 +441,9 @@ public final class PointsCommands implements PointsCommandExecutor, AutoCloseabl
     private MessageArguments.Builder balanceArgs(long balance) {
         String language = consoleLanguage();
         return MessageArguments.builder()
-            .unparsed("balance", this.messages.formatted(balance, language))
+            .component("balance", this.messages.styled(balance, language))
             .unparsed("balance_raw", this.messages.raw(balance))
+            .unparsed("balance_formatted", this.messages.formatted(balance, language))
             .unparsed("balance_compact", this.messages.compact(balance, language));
     }
 
@@ -423,8 +466,8 @@ public final class PointsCommands implements PointsCommandExecutor, AutoCloseabl
         long amount;
         try {
             amount = type == CommandIntentType.ADMIN_RESET ? 0L : (type == CommandIntentType.ADMIN_SET
-                ? CommandParsers.nonNegativeAmount(rawAmount, this.snapshotSupplier.get().config().economy().maximumBalance())
-                : CommandParsers.positiveAmount(rawAmount, this.snapshotSupplier.get().config().economy().maximumBalance()));
+                ? CommandParsers.nonNegativeAmount(rawAmount, this.snapshotSupplier.get().config().economy().maximumBalance(), settings().amountInput().multipliers())
+                : CommandParsers.positiveAmount(rawAmount, this.snapshotSupplier.get().config().economy().maximumBalance(), settings().amountInput().multipliers()));
         } catch (IllegalArgumentException exception) {
             this.responder.send(sender, "invalid-amount", MessageArguments.builder().unparsed("input", rawAmount).build());
             return;
@@ -534,11 +577,12 @@ public final class PointsCommands implements PointsCommandExecutor, AutoCloseabl
         }
         this.responder.send(sender, "history-header", MessageArguments.builder().unparsed("page", Integer.toString(page)).build());
         DateTimeFormatter formatter = DateTimeFormatter.ISO_OFFSET_DATE_TIME.withZone(settings().history().timeZone());
+        String language = consoleLanguage();
         for (HistoryEntry entry : history.entries()) {
             this.responder.send(sender, "history-entry", MessageArguments.builder()
                 .unparsed("date", formatter.format(entry.createdAt()))
-                .unparsed("amount", Long.toString(entry.delta()))
-                .unparsed("balance", Long.toString(entry.balanceAfter()))
+                .component("amount", this.messages.styled(entry.delta(), language))
+                .component("balance", this.messages.styled(entry.balanceAfter(), language))
                 .unparsed("reason", entry.reason().value())
                 .unparsed("type", entry.type().name())
                 .unparsed("operation", entry.operationId().toString())

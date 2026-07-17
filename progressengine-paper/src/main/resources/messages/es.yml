@@ -1,5 +1,5 @@
 # Mensajes y acciones de feedback en español para ProgressEngine.
-config-version: 1
+config-version: 2
 
 number-format:
   grouping-separator: "."
@@ -15,6 +15,12 @@ number-format:
     quadrillion: "Qa"
     quintillion: "Qi"
 
+currency:
+  display-name: "Points"
+  symbol: ""
+  format: "%price% %display-name%"
+  price-format: "COMPACT"
+
 messages:
   points-loading: "<yellow>Tus points todavía están cargando.</yellow>"
   command-no-permission: "<red>No tenés permiso para usar esto.</red>"
@@ -27,18 +33,18 @@ messages:
   invalid-reason: "<red>Razón inválida: <input>.</red>"
   unknown-target: "<red>Jugador desconocido: <target>.</red>"
   target-self: "<red>No podés enviarte points a vos mismo.</red>"
-  balance-self: "<green>Balance: <balance> points.</green>"
-  balance-other: "<green>Balance de <target>: <balance> points.</green>"
-  pay-range: "<red>La cantidad debe estar entre <minimum> y <maximum> points.</red>"
-  pay-confirm-required: "<yellow>Confirmá el envío de <amount> points a <target> con <gold>/points pay confirm <token></gold>.</yellow>"
+  balance-self: "<green>Balance: <balance>.</green>"
+  balance-other: "<green>Balance de <target>: <balance>.</green>"
+  pay-range: "<red>La cantidad debe estar entre <minimum> y <maximum>.</red>"
+  pay-confirm-required: "<yellow>Confirmá el envío de <amount> a <target> con <gold>/points pay confirm <token></gold>.</yellow>"
   pay-retry-available: "<yellow>El resultado no fue confirmado. Reintentá la misma intención con <gold>/points pay retry <token></gold>.</yellow>"
   pay-token-invalid: "<red>Token de pago inválido: <token>.</red>"
   pay-token-expired: "<red>El token de pago <token> venció.</red>"
   pay-token-stale: "<red>Tu balance cambió desde que generaste la confirmación. Generá el pago nuevamente.</red>"
-  pay-success-sender: "<green>Enviaste <amount> points a <target>. Balance: <balance>.</green>"
-  pay-success-receiver: "<green>Recibiste <amount> points de <sender>. Balance: <balance>.</green>"
-  pay-insufficient-funds: "<red>Necesitás <amount> points, pero tu balance es <balance>.</red>"
-  pay-balance-limit: "<red><target> no puede recibir <amount> points porque superaría su límite.</red>"
+  pay-success-sender: "<green>Enviaste <amount> a <target>. Balance: <balance>.</green>"
+  pay-success-receiver: "<green>Recibiste <amount> de <sender>. Balance: <balance>.</green>"
+  pay-insufficient-funds: "<red>Necesitás <amount>, pero tu balance es <balance>.</red>"
+  pay-balance-limit: "<red><target> no puede recibir <amount> porque superaría su límite.</red>"
   pay-cooldown: "<red>Esperá <seconds>s antes de enviar otro pago.</red>"
   history-empty: "<yellow>No se encontraron movimientos de points.</yellow>"
   history-header: "<gold>Historial de points <gray>(página <page>)</gray></gold>"
@@ -46,8 +52,8 @@ messages:
   history-session-expired: "<red>La sesión de historial venció. Abrí el historial nuevamente.</red>"
   history-next-page: "<yellow>Página siguiente: <gold>/points history <page></gold></yellow>"
   history-previous-page: "<yellow>Página anterior: <gold>/points history <page></gold></yellow>"
-  admin-add-success: "<green>Agregaste <amount> points a <target>. Balance: <balance>.</green>"
-  admin-remove-success: "<green>Quitaste <amount> points a <target>. Balance: <balance>.</green>"
+  admin-add-success: "<green>Agregaste <amount> a <target>. Balance: <balance>.</green>"
+  admin-remove-success: "<green>Quitaste <amount> a <target>. Balance: <balance>.</green>"
   admin-set-success: "<green>Balance de <target> establecido en <balance>.</green>"
   admin-reset-success: "<green>Balance de <target> reiniciado. Balance: <balance>.</green>"
   admin-retry-available: "<yellow>El resultado no fue confirmado. Reintentá la misma intención con <gold>/points admin retry <token></gold>.</yellow>"
@@ -61,7 +67,7 @@ messages:
 feedback:
   award-received:
     - type: action_bar
-      message: "<green>+<amount> points <gray>| <white><balance> total</white></gray></green>"
+      message: "<green>+<amount> <gray>| <white><balance> total</white></gray></green>"
     - type: sound
       sound: "minecraft:entity.experience_orb.pickup"
       source: "master"
@@ -69,7 +75,7 @@ feedback:
       pitch: 1.2
   transfer-received:
     - type: chat
-      message: "<green>Recibiste <amount> points de <sender>. Balance: <balance>.</green>"
+      message: "<green>Recibiste <amount> de <sender>. Balance: <balance>.</green>"
     - type: sound
       sound: "minecraft:block.note_block.pling"
       source: "master"

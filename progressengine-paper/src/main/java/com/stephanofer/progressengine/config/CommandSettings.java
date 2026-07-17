@@ -5,11 +5,12 @@ import java.time.ZoneId;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Locale;
 import java.util.Set;
 import java.util.regex.Pattern;
 
 public record CommandSettings(Registration registration, Availability availability, Permissions permissions,
-                              Pay pay, History history, Suggestions suggestions, Reasons reasons) {
+                               AmountInput amountInput, Pay pay, History history, Suggestions suggestions, Reasons reasons) {
     public static final int CURRENT_VERSION = 1;
     private static final Pattern COMMAND_LABEL = Pattern.compile("[a-z][a-z0-9_-]{0,31}");
     private static final Pattern PERMISSION = Pattern.compile("[a-z0-9._-]+(\\.[a-z0-9._-]+)*");
@@ -18,6 +19,7 @@ public record CommandSettings(Registration registration, Availability availabili
         Objects.requireNonNull(registration, "registration");
         Objects.requireNonNull(availability, "availability");
         Objects.requireNonNull(permissions, "permissions");
+        Objects.requireNonNull(amountInput, "amountInput");
         Objects.requireNonNull(pay, "pay");
         Objects.requireNonNull(history, "history");
         Objects.requireNonNull(suggestions, "suggestions");
@@ -29,11 +31,46 @@ public record CommandSettings(Registration registration, Availability availabili
             new Registration("points", List.of()),
             Availability.enabled(),
             Permissions.defaults(),
+            AmountInput.defaults(),
             new Pay(1L, 1_000_000_000L, 5L, new Confirmation(true, 100_000L, 30L), 86_400L),
             new History(10, 120L, ZoneId.of("UTC")),
             new Suggestions(10_000, 300L),
             Reasons.defaults()
         );
+    }
+
+    public record AmountInput(Map<String, Long> multipliers) {
+        private static final Pattern SUFFIX = Pattern.compile("[a-z0-9]{1,8}");
+
+        public AmountInput {
+            Objects.requireNonNull(multipliers, "multipliers");
+            java.util.LinkedHashMap<String, Long> normalized = new java.util.LinkedHashMap<>();
+            for (Map.Entry<String, Long> entry : multipliers.entrySet()) {
+                String suffix = Objects.requireNonNull(entry.getKey(), "multiplier suffix").toLowerCase(Locale.ROOT);
+                Long multiplier = Objects.requireNonNull(entry.getValue(), "multiplier value");
+                if (!SUFFIX.matcher(suffix).matches()) {
+                    throw new IllegalArgumentException("amount multiplier suffix must match [a-z0-9]{1,8}");
+                }
+                if (multiplier < 1L) {
+                    throw new IllegalArgumentException("amount multiplier must be positive");
+                }
+                if (normalized.putIfAbsent(suffix, multiplier) != null) {
+                    throw new IllegalArgumentException("amount multiplier suffixes cannot contain duplicates ignoring case");
+                }
+            }
+            multipliers = Map.copyOf(normalized);
+        }
+
+        public static AmountInput defaults() {
+            return new AmountInput(Map.of(
+                "k", 1_000L,
+                "m", 1_000_000L,
+                "b", 1_000_000_000L,
+                "t", 1_000_000_000_000L,
+                "q", 1_000_000_000_000_000L,
+                "qq", 1_000_000_000_000_000_000L
+            ));
+        }
     }
 
     public record Registration(String root, List<String> aliases) {

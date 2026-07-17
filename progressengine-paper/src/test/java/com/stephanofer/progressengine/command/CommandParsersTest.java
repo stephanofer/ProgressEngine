@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.UUID;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 final class CommandParsersTest {
@@ -21,6 +22,19 @@ final class CommandParsersTest {
         assertThrows(IllegalArgumentException.class, () -> CommandParsers.positiveAmount("1e3", 100L));
         assertThrows(IllegalArgumentException.class, () -> CommandParsers.positiveAmount("101", 100L));
         assertThrows(IllegalArgumentException.class, () -> CommandParsers.positiveAmount("9223372036854775808", Long.MAX_VALUE));
+    }
+
+    @Test
+    void abbreviatedAmountsExpandExactlyBeforeApplyingLimits() {
+        Map<String, Long> multipliers = Map.of("k", 1_000L, "m", 1_000_000L);
+
+        assertEquals(10_000L, CommandParsers.positiveAmount("10K", 20_000L, multipliers));
+        assertEquals(1_500L, CommandParsers.positiveAmount("1.5k", 20_000L, multipliers));
+        assertEquals(100L, CommandParsers.positiveAmount("0.1k", 20_000L, multipliers));
+        assertThrows(IllegalArgumentException.class, () -> CommandParsers.positiveAmount("1.0001k", 20_000L, multipliers));
+        assertThrows(IllegalArgumentException.class, () -> CommandParsers.positiveAmount("1.5", 20_000L, multipliers));
+        assertThrows(IllegalArgumentException.class, () -> CommandParsers.positiveAmount("1x", 20_000L, multipliers));
+        assertThrows(IllegalArgumentException.class, () -> CommandParsers.positiveAmount("21k", 20_000L, multipliers));
     }
 
     @Test

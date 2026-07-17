@@ -1,6 +1,6 @@
 # ProgressEngine runtime configuration.
 # MySQL remains the only durable source of truth; Redis and local cache are reconstructable.
-config-version: 1
+config-version: 2
 
 # Must be unique across the HERA network. Used for audit and Redis message origin checks.
 server-id: "lobby-1"
@@ -8,6 +8,23 @@ server-id: "lobby-1"
 economy:
   maximum-balance: 9223372036854775807
   award-rounding: "FLOOR"
+  amount-colors:
+    enabled: true
+    tiers:
+      - minimum: 0
+        color: "#2bd66f"
+      - minimum: 1000
+        color: "#a3d14d"
+      - minimum: 1000000
+        color: "#ebbc23"
+      - minimum: 1000000000
+        color: "#eb7b23"
+      - minimum: 1000000000000
+        color: "#ff9999"
+      - minimum: 1000000000000000
+        color: "#ff5353"
+      - minimum: 1000000000000000000
+        color: "#d92f45"
 
 database:
   host: "127.0.0.1"

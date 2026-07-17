@@ -23,12 +23,49 @@ public record ProgressEngineConfig(
         Objects.requireNonNull(runtime, "runtime");
     }
 
-    public record EconomySettings(long maximumBalance, AwardRounding awardRounding) {
+    public record EconomySettings(long maximumBalance, AwardRounding awardRounding, AmountColors amountColors) {
         public EconomySettings {
             if (maximumBalance < 1L) {
                 throw new IllegalArgumentException("maximumBalance must be positive");
             }
             Objects.requireNonNull(awardRounding, "awardRounding");
+            Objects.requireNonNull(amountColors, "amountColors");
+        }
+
+        public EconomySettings(long maximumBalance, AwardRounding awardRounding) {
+            this(maximumBalance, awardRounding, AmountColors.defaults());
+        }
+    }
+
+    public record AmountColors(boolean enabled, java.util.List<AmountColorTier> tiers) {
+        public AmountColors {
+            Objects.requireNonNull(tiers, "tiers");
+            tiers = java.util.List.copyOf(tiers);
+            if (tiers.isEmpty() || tiers.getFirst().minimum() != 0L) {
+                throw new IllegalArgumentException("amount color tiers must start at zero");
+            }
+            long previous = -1L;
+            for (AmountColorTier tier : tiers) {
+                if (tier.minimum() <= previous) throw new IllegalArgumentException("amount color tier minimums must be strictly increasing");
+                previous = tier.minimum();
+            }
+        }
+
+        public static AmountColors defaults() {
+            return new AmountColors(true, java.util.List.of(
+                new AmountColorTier(0L, "#2bd66f"), new AmountColorTier(1_000L, "#a3d14d"),
+                new AmountColorTier(1_000_000L, "#ebbc23"), new AmountColorTier(1_000_000_000L, "#eb7b23"),
+                new AmountColorTier(1_000_000_000_000L, "#ff9999"), new AmountColorTier(1_000_000_000_000_000L, "#ff5353"),
+                new AmountColorTier(1_000_000_000_000_000_000L, "#d92f45")
+            ));
+        }
+    }
+
+    public record AmountColorTier(long minimum, String color) {
+        public AmountColorTier {
+            if (minimum < 0L) throw new IllegalArgumentException("amount color minimum cannot be negative");
+            color = requireText(color, "color");
+            if (!color.matches("#[0-9a-fA-F]{6}")) throw new IllegalArgumentException("amount color must be a six-digit hex color");
         }
     }
 

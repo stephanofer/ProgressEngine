@@ -456,6 +456,14 @@ public final class AccountEconomy {
         StoredAccount sender = first.playerId().equals(request.senderId()) ? first : second;
         StoredAccount receiver = first.playerId().equals(request.receiverId()) ? first : second;
 
+        if (request.expectedSenderRevision().isPresent()
+            && sender.revision() != request.expectedSenderRevision().getAsLong()) {
+            this.persistence.operations().complete(connection, new OperationCompletion(
+                request.operationId(), OperationStatus.STALE_CONFIRMATION, OperationResultCodec.rejectionPayload(), timestamp
+            ));
+            return new AccountMutationOutcome.Rejected(request.operationId(), OperationStatus.STALE_CONFIRMATION, ReplayStatus.ORIGINAL);
+        }
+
         if (sender.balance() < request.amount()) {
             this.persistence.operations().complete(connection, new OperationCompletion(
                 request.operationId(),
@@ -777,6 +785,9 @@ public final class AccountEconomy {
         }
         if (rejected.status() == OperationStatus.BALANCE_LIMIT_EXCEEDED) {
             return new TransferResult.BalanceLimitExceeded(operationId, rejected.replayStatus());
+        }
+        if (rejected.status() == OperationStatus.STALE_CONFIRMATION) {
+            return new TransferResult.StaleConfirmation(operationId, rejected.replayStatus());
         }
         throw unexpectedOutcome(OperationType.TRANSFER, rejected.status());
     }

@@ -1,0 +1,58 @@
+# ProgressEngine Paper Dialog for large /points pay confirmations.
+config-version: 1
+
+behavior:
+  can-close-with-escape: true
+  pause: false
+  body-width: 420
+  confirm-button-width: 150
+  cancel-button-width: 150
+
+locales:
+  en:
+    title: "Confirm payment"
+    external-title: "Confirm Points payment"
+    body:
+      - "Review the details carefully before confirming."
+      - ""
+      - "Receiving player"
+      - "<receiver>"
+      - ""
+      - "Amount to send"
+      - "<amount>"
+      - "Exact amount: <amount_exact>"
+      - ""
+      - "Your balance after payment"
+      - "<balance_after>"
+      - ""
+      - "This confirmation expires in <expires_in> seconds."
+    confirm:
+      label: "Confirm payment"
+      tooltip: "Send exactly <amount_exact>"
+    cancel:
+      label: "Cancel"
+      tooltip: "No transfer will be made."
+
+  es:
+    title: "Confirmar pago"
+    external-title: "Confirmar pago de Points"
+    body:
+      - "Revisá cuidadosamente los datos antes de confirmar."
+      - ""
+      - "Jugador receptor"
+      - "<receiver>"
+      - ""
+      - "Monto a enviar"
+      - "<amount>"
+      - "Cantidad exacta: <amount_exact>"
+      - ""
+      - "Tu saldo después del pago"
+      - "<balance_after>"
+      - ""
+      - "Esta confirmación vence en <expires_in> segundos."
+    confirm:
+      label: "Confirmar pago"
+      tooltip: "Enviar exactamente <amount_exact>"
+    cancel:
+      label: "Cancelar"
+      tooltip: "No se realizará ninguna transferencia."

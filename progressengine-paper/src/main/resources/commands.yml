@@ -1,5 +1,5 @@
 # ProgressEngine command configuration.
-config-version: 1
+config-version: 2
 
 registration:
   root: "points"
@@ -31,6 +31,16 @@ permissions:
   admin-history: "progressengine.command.admin.history"
   admin-reload: "progressengine.command.admin.reload"
   admin-status: "progressengine.command.admin.status"
+
+# Optional suffixes accepted by monetary command amounts. They are case-insensitive.
+amount-input:
+  multipliers:
+    k: 1000
+    m: 1000000
+    b: 1000000000
+    t: 1000000000000
+    q: 1000000000000000
+    qq: 1000000000000000000
 
 pay:
   minimum: 1

@@ -35,14 +35,62 @@ final class BoostedYamlConfigurationLoaderTest {
         assertEquals("en", loaded.snapshot().localization().fallbackLanguage());
         assertEquals("Loading...", loaded.snapshot().messages().require("en").numberFormat().loadingText());
         assertEquals("Cargando...", loaded.snapshot().messages().require("es").numberFormat().loadingText());
+        assertEquals(PriceFormat.COMPACT, loaded.snapshot().messages().require("es").currency().priceFormat());
+        assertEquals("9,5K Points", com.stephanofer.progressengine.localization.PointsDisplay.display(9_500L, loaded.snapshot().messages().require("es")));
         assertTrue(loaded.snapshot().messages().require("en").messages().containsKey("points-loading"));
         assertTrue(Files.exists(this.directory.resolve("config.yml")));
         assertTrue(Files.exists(this.directory.resolve("identity.yml")));
         assertTrue(Files.exists(this.directory.resolve("commands.yml")));
+        assertTrue(Files.exists(this.directory.resolve("dialogs/pay-confirmation.yml")));
         assertTrue(Files.exists(this.directory.resolve("messages/es.yml")));
         assertTrue(Files.exists(this.directory.resolve("messages/en.yml")));
+        assertEquals("Confirm payment", loaded.snapshot().payDialog().locales().get("en").title());
+        assertEquals(420, loaded.snapshot().payDialog().bodyWidth());
+        assertTrue(loaded.serializedDocuments().containsKey("dialogs/pay-confirmation.yml"));
         assertFalse(loaded.snapshot().config().database().toString().contains("password=\""));
         assertTrue(loaded.snapshot().config().database().toString().contains("password=<hidden>"));
+    }
+
+    @Test
+    void rejectsInvalidPayDialogWidth() throws Exception {
+        writeDialog(defaultResource("dialogs/pay-confirmation.yml").replace("body-width: 420", "body-width: 0"));
+
+        ConfigurationLoadException exception = assertThrows(ConfigurationLoadException.class, () -> loader().load(1L));
+
+        assertTrue(exception.problems().stream().anyMatch(problem -> problem.path().contains("dialogs/pay-confirmation.yml:behavior.body-width")));
+    }
+
+    @Test
+    void rejectsMissingPayDialogLocale() throws Exception {
+        writeDialog(defaultResource("dialogs/pay-confirmation.yml").replace("  es:\n    title:", "  fr:\n    title:"));
+
+        ConfigurationLoadException exception = assertThrows(ConfigurationLoadException.class, () -> loader().load(1L));
+
+        assertTrue(exception.problems().stream().anyMatch(problem -> problem.path().contains("dialogs/pay-confirmation.yml:locales.es")));
+    }
+
+    @Test
+    void rejectsUnknownPayDialogPlaceholder() throws Exception {
+        writeDialog(defaultResource("dialogs/pay-confirmation.yml").replace("Exact amount: <amount_exact>", "Exact amount: <unexpected>"));
+
+        ConfigurationLoadException exception = assertThrows(ConfigurationLoadException.class, () -> loader().load(1L));
+
+        assertTrue(exception.problems().stream().anyMatch(problem -> problem.path().contains("dialogs/pay-confirmation.yml:locales.en.body")));
+    }
+
+    @Test
+    void invalidReloadKeepsPreviousPayDialog() throws Exception {
+        BoostedYamlConfigurationLoader loader = loader();
+        ConfigurationManager manager = new ConfigurationManager(loader, Runnable::run);
+
+        ConfigurationReloadResult first = manager.reloadAsync().join();
+        writeDialog(defaultResource("dialogs/pay-confirmation.yml").replace("body-width: 420", "body-width: 0"));
+        ConfigurationReloadResult second = manager.reloadAsync().join();
+
+        assertTrue(first.success());
+        assertFalse(second.success());
+        assertEquals(first.activeSnapshot().orElseThrow().payDialog(), manager.activeSnapshot().orElseThrow().payDialog());
+        assertEquals(1L, manager.activeSnapshot().orElseThrow().revision());
     }
 
     @Test
@@ -69,6 +117,19 @@ final class BoostedYamlConfigurationLoaderTest {
         ConfigurationLoadException exception = assertThrows(ConfigurationLoadException.class, () -> loader().load(1L));
 
         assertTrue(exception.problems().stream().anyMatch(problem -> problem.path().contains("messages/en.yml:number-format")));
+    }
+
+    @Test
+    void rejectsUnknownCurrencyFormatPlaceholder() throws Exception {
+        Files.createDirectories(this.directory.resolve("messages"));
+        Files.writeString(this.directory.resolve("messages/en.yml"), defaultResource("messages/en.yml").replace(
+            "format: \"%price% %display-name%\"",
+            "format: \"%price% %unknown%\""
+        ));
+
+        ConfigurationLoadException exception = assertThrows(ConfigurationLoadException.class, () -> loader().load(1L));
+
+        assertTrue(exception.problems().stream().anyMatch(problem -> problem.path().contains("messages/en.yml:currency")));
     }
 
     @Test
@@ -138,7 +199,7 @@ final class BoostedYamlConfigurationLoaderTest {
 
     @Test
     void rejectsFutureConfigVersion() throws Exception {
-        Files.writeString(this.directory.resolve("config.yml"), defaultConfig().replace("config-version: 1", "config-version: 999"));
+        Files.writeString(this.directory.resolve("config.yml"), defaultConfig().replace("config-version: 2", "config-version: 999"));
 
         ConfigurationLoadException exception = assertThrows(ConfigurationLoadException.class, () -> loader().load(1L));
 
@@ -155,6 +216,11 @@ final class BoostedYamlConfigurationLoaderTest {
 
     private static String defaultConfig() throws Exception {
         return defaultResource("config.yml");
+    }
+
+    private void writeDialog(String content) throws Exception {
+        Files.createDirectories(this.directory.resolve("dialogs"));
+        Files.writeString(this.directory.resolve("dialogs/pay-confirmation.yml"), content);
     }
 
     private static String defaultResource(String name) throws Exception {

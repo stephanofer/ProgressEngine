@@ -47,12 +47,14 @@ public final class BoostedYamlConfigurationLoader implements ConfigurationLoader
     private static final String CONFIG_FILE_NAME = "config.yml";
     private static final String IDENTITY_FILE_NAME = "identity.yml";
     private static final String COMMANDS_FILE_NAME = "commands.yml";
+    private static final String PAY_CONFIRMATION_DIALOG_FILE_NAME = "dialogs/pay-confirmation.yml";
     private static final String ES_MESSAGES_FILE_NAME = "messages/es.yml";
     private static final String EN_MESSAGES_FILE_NAME = "messages/en.yml";
-    private static final int CONFIG_VERSION = 1;
+    private static final int CONFIG_VERSION = 2;
     private static final int IDENTITY_VERSION = 1;
-    private static final int COMMANDS_VERSION = 1;
-    private static final int MESSAGES_VERSION = 1;
+    private static final int COMMANDS_VERSION = 2;
+    private static final int PAY_CONFIRMATION_DIALOG_VERSION = 1;
+    private static final int MESSAGES_VERSION = 2;
     private static final Pattern REDIS_COMPONENT = Pattern.compile("[a-zA-Z0-9._:-]+");
     private static final Pattern TABLE_PREFIX = Pattern.compile("[a-zA-Z0-9_]*");
     private static final Pattern MINI_MESSAGE_TAG = Pattern.compile("<\\/?([a-zA-Z0-9_:-]+)(?:[\\s:>/]|>)");
@@ -108,6 +110,8 @@ public final class BoostedYamlConfigurationLoader implements ConfigurationLoader
         "infrastructure-unavailable"
     );
     private static final Set<String> FEEDBACK_KEYS = Set.of("award-received", "transfer-received");
+    private static final Set<String> PAY_DIALOG_SAFE_PLACEHOLDERS = Set.of("amount_exact", "balance_after", "expires_in");
+    private static final Set<String> PAY_DIALOG_COMPONENT_PLACEHOLDERS = Set.of("receiver", "amount");
     private static final Map<String, Set<String>> PLACEHOLDERS = Map.ofEntries(
         Map.entry("points-loading", Set.of()),
         Map.entry("command-no-permission", Set.of()),
@@ -159,6 +163,9 @@ public final class BoostedYamlConfigurationLoader implements ConfigurationLoader
         "economy",
         "economy.maximum-balance",
         "economy.award-rounding",
+        "economy.amount-colors",
+        "economy.amount-colors.enabled",
+        "economy.amount-colors.tiers",
         "database",
         "database.host",
         "database.port",
@@ -242,6 +249,7 @@ public final class BoostedYamlConfigurationLoader implements ConfigurationLoader
         LocalizationSettings localization = readLocalization(yaml, problems);
         LoadedIdentity loadedIdentity = loadIdentity(problems);
         LoadedCommands loadedCommands = loadCommands(config, problems);
+        LoadedPayDialog loadedPayDialog = loadPayDialog(problems);
         LoadedMessages loadedMessages = loadMessages(localization, problems);
         if (!problems.isEmpty()) {
             throw new ConfigurationLoadException(problems);
@@ -253,12 +261,14 @@ public final class BoostedYamlConfigurationLoader implements ConfigurationLoader
             localization,
             loadedIdentity.settings(),
             loadedMessages.catalogs(),
-            loadedCommands.settings()
+            loadedCommands.settings(),
+            loadedPayDialog.settings()
         );
         Map<String, String> serialized = new LinkedHashMap<>();
         serialized.put(CONFIG_FILE_NAME, yaml.dump());
         serialized.put(IDENTITY_FILE_NAME, loadedIdentity.serialized());
         serialized.put(COMMANDS_FILE_NAME, loadedCommands.serialized());
+        serialized.put(PAY_CONFIRMATION_DIALOG_FILE_NAME, loadedPayDialog.serialized());
         serialized.put(ES_MESSAGES_FILE_NAME, loadedMessages.serializedEs());
         serialized.put(EN_MESSAGES_FILE_NAME, loadedMessages.serializedEn());
         return new LoadedConfiguration(snapshot, serialized);
@@ -269,13 +279,20 @@ public final class BoostedYamlConfigurationLoader implements ConfigurationLoader
         Objects.requireNonNull(configuration, "configuration");
         for (Map.Entry<String, String> document : configuration.serializedDocuments().entrySet()) {
             Path target = this.dataDirectory.resolve(document.getKey());
-            Files.createDirectories(target.getParent() == null ? this.dataDirectory : target.getParent());
-            Path temporary = target.resolveSibling(target.getFileName() + ".tmp");
-            Files.writeString(temporary, document.getValue(), StandardCharsets.UTF_8);
+            Path parent = target.getParent() == null ? this.dataDirectory : target.getParent();
+            Files.createDirectories(parent);
+            Path temporary = Files.createTempFile(parent, target.getFileName().toString(), ".tmp");
             try {
+                Files.writeString(temporary, document.getValue(), StandardCharsets.UTF_8);
                 Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
             } catch (AtomicMoveNotSupportedException ignored) {
-                Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING);
+                try {
+                    Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING);
+                } catch (IOException exception) {
+                    throw new IOException("could not persist " + document.getKey() + " to " + target + ": " + exception.getMessage(), exception);
+                }
+            } catch (IOException exception) {
+                throw new IOException("could not persist " + document.getKey() + " to " + target + ": " + exception.getMessage(), exception);
             } finally {
                 Files.deleteIfExists(temporary);
             }
@@ -353,6 +370,7 @@ public final class BoostedYamlConfigurationLoader implements ConfigurationLoader
         Reader reader = new Reader(yaml, problems);
         reader.requireVersion();
         reader.requireSection("economy");
+        reader.requireSection("economy.amount-colors");
         reader.requireSection("database");
         reader.requireSection("database.pool");
         reader.requireSection("redis");
@@ -365,6 +383,7 @@ public final class BoostedYamlConfigurationLoader implements ConfigurationLoader
         String serverId = reader.component("server-id", "lobby-1", false);
         long maximumBalance = reader.longRange("economy.maximum-balance", 1L, Long.MAX_VALUE, Long.MAX_VALUE);
         AwardRounding rounding = reader.rounding("economy.award-rounding", AwardRounding.FLOOR);
+        ProgressEngineConfig.AmountColors amountColors = readAmountColors(yaml, reader, problems, maximumBalance);
 
         String dbHost = reader.text("database.host", "127.0.0.1", false, false);
         int dbPort = reader.intRange("database.port", 1, 65_535, 3306);
@@ -426,7 +445,7 @@ public final class BoostedYamlConfigurationLoader implements ConfigurationLoader
 
         return new ProgressEngineConfig(
             serverId,
-            new EconomySettings(maximumBalance, rounding),
+            new EconomySettings(maximumBalance, rounding, amountColors),
             new DatabaseSettings(
                 dbHost,
                 dbPort,
@@ -467,6 +486,39 @@ public final class BoostedYamlConfigurationLoader implements ConfigurationLoader
             new IntegrationSettings(networkBoosters, placeholderApi),
             new RuntimeSettings(runtimeShutdown, databaseHealthInterval)
         );
+    }
+
+    private ProgressEngineConfig.AmountColors readAmountColors(YamlDocument yaml, Reader reader, List<ConfigurationProblem> problems, long maximumBalance) {
+        boolean enabled = reader.bool("economy.amount-colors.enabled", true);
+        Object raw = yaml.get("economy.amount-colors.tiers", null);
+        if (!(raw instanceof List<?> list)) {
+            problems.add(new ConfigurationProblem("economy.amount-colors.tiers", "must be a list"));
+            return ProgressEngineConfig.AmountColors.defaults();
+        }
+        List<ProgressEngineConfig.AmountColorTier> tiers = new ArrayList<>();
+        for (int index = 0; index < list.size(); index++) {
+            Object entry = list.get(index);
+            if (!(entry instanceof Map<?, ?> values) || !(values.get("minimum") instanceof Number number) || !(values.get("color") instanceof String color)) {
+                problems.add(new ConfigurationProblem("economy.amount-colors.tiers[" + index + ']', "must contain integer minimum and hex color"));
+                continue;
+            }
+            long minimum = number.longValue();
+            if (number.doubleValue() != minimum || minimum > maximumBalance) {
+                problems.add(new ConfigurationProblem("economy.amount-colors.tiers[" + index + "].minimum", "must be an integer inside the economy range"));
+                continue;
+            }
+            try {
+                tiers.add(new ProgressEngineConfig.AmountColorTier(minimum, color));
+            } catch (IllegalArgumentException exception) {
+                problems.add(new ConfigurationProblem("economy.amount-colors.tiers[" + index + ']', exception.getMessage()));
+            }
+        }
+        try {
+            return new ProgressEngineConfig.AmountColors(enabled, tiers);
+        } catch (IllegalArgumentException exception) {
+            problems.add(new ConfigurationProblem("economy.amount-colors", exception.getMessage()));
+            return ProgressEngineConfig.AmountColors.defaults();
+        }
     }
 
     private LocalizationSettings readLocalization(YamlDocument yaml, List<ConfigurationProblem> problems) {
@@ -594,10 +646,153 @@ public final class BoostedYamlConfigurationLoader implements ConfigurationLoader
         return new LoadedCommands(settings, yaml.dump());
     }
 
+    private LoadedPayDialog loadPayDialog(List<ConfigurationProblem> problems) throws ConfigurationLoadException {
+        byte[] defaults = readDefaults(PAY_CONFIRMATION_DIALOG_FILE_NAME);
+        byte[] document = readDocument(PAY_CONFIRMATION_DIALOG_FILE_NAME, defaults);
+        YamlDocument yaml = loadYaml(PAY_CONFIRMATION_DIALOG_FILE_NAME, document, defaults, PAY_CONFIRMATION_DIALOG_VERSION);
+        validatePayDialogRoutes(yaml, problems);
+        PayConfirmationDialogSettings settings = readPayDialog(yaml, problems);
+        return new LoadedPayDialog(settings, yaml.dump());
+    }
+
+    private void validatePayDialogRoutes(YamlDocument yaml, List<ConfigurationProblem> problems) {
+        Set<String> exact = Set.of(
+            "config-version",
+            "behavior",
+            "behavior.can-close-with-escape",
+            "behavior.pause",
+            "behavior.body-width",
+            "behavior.confirm-button-width",
+            "behavior.cancel-button-width",
+            "locales"
+        );
+        Set<String> localeRoutes = Set.of("title", "external-title", "body", "confirm", "confirm.label", "confirm.tooltip", "cancel", "cancel.label", "cancel.tooltip");
+        for (String route : yaml.getRoutesAsStrings(true)) {
+            if (exact.contains(route)) {
+                continue;
+            }
+            if (route.startsWith("locales.")) {
+                String remaining = route.substring("locales.".length());
+                int separator = remaining.indexOf('.');
+                String language = separator < 0 ? remaining : remaining.substring(0, separator);
+                if (!language.equals("en") && !language.equals("es")) {
+                    problems.add(new ConfigurationProblem(PAY_CONFIRMATION_DIALOG_FILE_NAME + ':' + route, "unknown dialog locale"));
+                    continue;
+                }
+                if (separator < 0 || localeRoutes.contains(remaining.substring(separator + 1))) {
+                    continue;
+                }
+            }
+            problems.add(new ConfigurationProblem(PAY_CONFIRMATION_DIALOG_FILE_NAME + ':' + route, "unknown dialog configuration key"));
+        }
+    }
+
+    private PayConfirmationDialogSettings readPayDialog(YamlDocument yaml, List<ConfigurationProblem> problems) {
+        Reader reader = new Reader(yaml, problems, PAY_CONFIRMATION_DIALOG_FILE_NAME + ':');
+        int version = reader.intRange("config-version", PAY_CONFIRMATION_DIALOG_VERSION, PAY_CONFIRMATION_DIALOG_VERSION, PAY_CONFIRMATION_DIALOG_VERSION);
+        if (version != PAY_CONFIRMATION_DIALOG_VERSION) {
+            problems.add(new ConfigurationProblem(PAY_CONFIRMATION_DIALOG_FILE_NAME + ":config-version", "unsupported version"));
+        }
+        reader.requireSection("behavior");
+        reader.requireSection("locales");
+        reader.requireSection("locales.en");
+        reader.requireSection("locales.es");
+        reader.requireSection("locales.en.confirm");
+        reader.requireSection("locales.en.cancel");
+        reader.requireSection("locales.es.confirm");
+        reader.requireSection("locales.es.cancel");
+
+        boolean canCloseWithEscape = reader.bool("behavior.can-close-with-escape", true);
+        boolean pause = reader.bool("behavior.pause", false);
+        int bodyWidth = reader.intRange("behavior.body-width", 1, 1024, 420);
+        int confirmButtonWidth = reader.intRange("behavior.confirm-button-width", 1, 1024, 150);
+        int cancelButtonWidth = reader.intRange("behavior.cancel-button-width", 1, 1024, 150);
+        Map<String, PayConfirmationDialogSettings.Locale> locales = new LinkedHashMap<>();
+        locales.put("en", readPayDialogLocale(yaml, reader, "en", problems));
+        locales.put("es", readPayDialogLocale(yaml, reader, "es", problems));
+        try {
+            return new PayConfirmationDialogSettings(canCloseWithEscape, pause, bodyWidth, confirmButtonWidth, cancelButtonWidth, locales);
+        } catch (IllegalArgumentException exception) {
+            problems.add(new ConfigurationProblem(PAY_CONFIRMATION_DIALOG_FILE_NAME, exception.getMessage()));
+            return new PayConfirmationDialogSettings(true, false, 420, 150, 150, Map.of(
+                "en", new PayConfirmationDialogSettings.Locale("Confirm payment", "Confirm Points payment", List.of("<receiver>", "<amount>"), "Confirm payment", "Send exactly <amount_exact>", "Cancel", "No transfer will be made."),
+                "es", new PayConfirmationDialogSettings.Locale("Confirmar pago", "Confirmar pago de Points", List.of("<receiver>", "<amount>"), "Confirmar pago", "Enviar exactamente <amount_exact>", "Cancelar", "No se realizará ninguna transferencia.")
+            ));
+        }
+    }
+
+    private PayConfirmationDialogSettings.Locale readPayDialogLocale(YamlDocument yaml, Reader reader, String language, List<ConfigurationProblem> problems) {
+        String base = "locales." + language;
+        String title = reader.text(base + ".title", language.equals("en") ? "Confirm payment" : "Confirmar pago", false, false);
+        validatePayDialogText(PAY_CONFIRMATION_DIALOG_FILE_NAME + ':' + base + ".title", title, PAY_DIALOG_SAFE_PLACEHOLDERS, problems);
+        String externalTitle = reader.text(base + ".external-title", language.equals("en") ? "Confirm Points payment" : "Confirmar pago de Points", false, false);
+        validatePayDialogText(PAY_CONFIRMATION_DIALOG_FILE_NAME + ':' + base + ".external-title", externalTitle, PAY_DIALOG_SAFE_PLACEHOLDERS, problems);
+        List<String> body = readPayDialogBody(yaml, base + ".body", problems);
+        String confirmLabel = reader.text(base + ".confirm.label", language.equals("en") ? "Confirm payment" : "Confirmar pago", false, false);
+        validatePayDialogText(PAY_CONFIRMATION_DIALOG_FILE_NAME + ':' + base + ".confirm.label", confirmLabel, PAY_DIALOG_SAFE_PLACEHOLDERS, problems);
+        String confirmTooltip = reader.text(base + ".confirm.tooltip", language.equals("en") ? "Send exactly <amount_exact>" : "Enviar exactamente <amount_exact>", false, false);
+        validatePayDialogText(PAY_CONFIRMATION_DIALOG_FILE_NAME + ':' + base + ".confirm.tooltip", confirmTooltip, PAY_DIALOG_SAFE_PLACEHOLDERS, problems);
+        String cancelLabel = reader.text(base + ".cancel.label", language.equals("en") ? "Cancel" : "Cancelar", false, false);
+        validatePayDialogText(PAY_CONFIRMATION_DIALOG_FILE_NAME + ':' + base + ".cancel.label", cancelLabel, PAY_DIALOG_SAFE_PLACEHOLDERS, problems);
+        String cancelTooltip = reader.text(base + ".cancel.tooltip", language.equals("en") ? "No transfer will be made." : "No se realizará ninguna transferencia.", false, false);
+        validatePayDialogText(PAY_CONFIRMATION_DIALOG_FILE_NAME + ':' + base + ".cancel.tooltip", cancelTooltip, PAY_DIALOG_SAFE_PLACEHOLDERS, problems);
+        return new PayConfirmationDialogSettings.Locale(title, externalTitle, body, confirmLabel, confirmTooltip, cancelLabel, cancelTooltip);
+    }
+
+    private List<String> readPayDialogBody(YamlDocument yaml, String path, List<ConfigurationProblem> problems) {
+        Object raw = yaml.get(path, null);
+        if (!(raw instanceof List<?> list)) {
+            problems.add(new ConfigurationProblem(PAY_CONFIRMATION_DIALOG_FILE_NAME + ':' + path, "must be a list"));
+            return List.of("<receiver>", "<amount>");
+        }
+        if (list.isEmpty()) {
+            problems.add(new ConfigurationProblem(PAY_CONFIRMATION_DIALOG_FILE_NAME + ':' + path, "must not be empty"));
+            return List.of("<receiver>", "<amount>");
+        }
+        List<String> body = new ArrayList<>();
+        boolean hasContent = false;
+        for (int index = 0; index < list.size(); index++) {
+            Object value = list.get(index);
+            String itemPath = PAY_CONFIRMATION_DIALOG_FILE_NAME + ':' + path + '[' + index + ']';
+            if (!(value instanceof String line)) {
+                problems.add(new ConfigurationProblem(itemPath, "must be a string"));
+                continue;
+            }
+            if (line.length() > 512) {
+                problems.add(new ConfigurationProblem(itemPath, "must be at most 512 characters"));
+                continue;
+            }
+            if (!line.isBlank()) {
+                hasContent = true;
+            }
+            Set<String> placeholders = PAY_DIALOG_SAFE_PLACEHOLDERS;
+            if (line.equals("<receiver>") || line.equals("<amount>")) {
+                placeholders = PAY_DIALOG_COMPONENT_PLACEHOLDERS;
+            }
+            validatePayDialogText(itemPath, line, placeholders, problems);
+            body.add(line);
+        }
+        if (!hasContent) {
+            problems.add(new ConfigurationProblem(PAY_CONFIRMATION_DIALOG_FILE_NAME + ':' + path, "must contain visible text"));
+        }
+        return body.isEmpty() ? List.of("<receiver>", "<amount>") : body;
+    }
+
+    private void validatePayDialogText(String path, String text, Set<String> placeholders, List<ConfigurationProblem> problems) {
+        java.util.regex.Matcher matcher = MINI_MESSAGE_TAG.matcher(text);
+        while (matcher.find()) {
+            String tag = matcher.group(1).toLowerCase(Locale.ROOT);
+            if (!placeholders.contains(tag)) {
+                problems.add(new ConfigurationProblem(path, "unknown dialog placeholder or MiniMessage tag: " + tag));
+            }
+        }
+    }
+
     private void validateCommandRoutes(YamlDocument yaml, List<ConfigurationProblem> problems) {
-        Set<String> allowedTop = Set.of("config-version", "registration", "availability", "permissions", "pay", "history", "suggestions", "reasons");
+        Set<String> allowedTop = Set.of("config-version", "registration", "availability", "permissions", "amount-input", "pay", "history", "suggestions", "reasons");
         Set<String> allowedStatic = Set.of(
-            "registration.root", "registration.aliases",
+             "registration.root", "registration.aliases",
+             "amount-input.multipliers",
             "pay.minimum", "pay.maximum", "pay.cooldown-seconds", "pay.confirmation", "pay.confirmation.enabled",
             "pay.confirmation.threshold", "pay.confirmation.expiry-seconds", "pay.retry-retention-seconds",
             "history.page-size", "history.session-expiry-seconds", "history.time-zone",
@@ -620,6 +815,9 @@ public final class BoostedYamlConfigurationLoader implements ConfigurationLoader
                 } catch (IllegalArgumentException ignored) {
                 }
             }
+            if (route.startsWith("amount-input.multipliers.")) {
+                continue;
+            }
             problems.add(new ConfigurationProblem(COMMANDS_FILE_NAME + ':' + route, "unknown configuration key"));
         }
     }
@@ -633,6 +831,7 @@ public final class BoostedYamlConfigurationLoader implements ConfigurationLoader
         reader.requireSection("registration");
         reader.requireSection("availability");
         reader.requireSection("permissions");
+        reader.requireSection("amount-input");
         reader.requireSection("pay");
         reader.requireSection("pay.confirmation");
         reader.requireSection("history");
@@ -652,6 +851,7 @@ public final class BoostedYamlConfigurationLoader implements ConfigurationLoader
         for (CommandSettings.CommandPermission permission : CommandSettings.CommandPermission.values()) {
             permissions.put(permission, reader.permission("permissions." + permission.configKey(), defaults.permissions().require(permission)));
         }
+        Map<String, Long> multipliers = readAmountMultipliers(yaml, problems);
 
         long minimum = reader.longRange("pay.minimum", 1L, Long.MAX_VALUE, defaults.pay().minimum());
         long maximum = reader.longRange("pay.maximum", 1L, Long.MAX_VALUE, defaults.pay().maximum());
@@ -679,6 +879,7 @@ public final class BoostedYamlConfigurationLoader implements ConfigurationLoader
                 new CommandSettings.Registration(root, aliases),
                 new CommandSettings.Availability(availability),
                 new CommandSettings.Permissions(permissions),
+                new CommandSettings.AmountInput(multipliers),
                 new CommandSettings.Pay(minimum, maximum, cooldown,
                     new CommandSettings.Confirmation(confirmationEnabled, threshold, expiry), retention),
                 new CommandSettings.History(pageSize, sessionExpiry, timeZone),
@@ -695,6 +896,25 @@ public final class BoostedYamlConfigurationLoader implements ConfigurationLoader
             problems.add(new ConfigurationProblem(COMMANDS_FILE_NAME, exception.getMessage()));
             return defaults;
         }
+    }
+
+    private Map<String, Long> readAmountMultipliers(YamlDocument yaml, List<ConfigurationProblem> problems) {
+        Map<String, Long> multipliers = new LinkedHashMap<>();
+        for (String route : yaml.getRoutesAsStrings(true)) {
+            if (!route.startsWith("amount-input.multipliers.")) continue;
+            String suffix = route.substring("amount-input.multipliers.".length());
+            Object raw = yaml.get(route, null);
+            if (!(raw instanceof Number number) || number.doubleValue() != number.longValue()) {
+                problems.add(new ConfigurationProblem(COMMANDS_FILE_NAME + ':' + route, "must be an integer"));
+                continue;
+            }
+            multipliers.put(suffix, number.longValue());
+        }
+        if (multipliers.isEmpty()) {
+            problems.add(new ConfigurationProblem(COMMANDS_FILE_NAME + ":amount-input.multipliers", "must define at least one suffix"));
+            return CommandSettings.AmountInput.defaults().multipliers();
+        }
+        return multipliers;
     }
 
     private List<String> readCommandAliases(YamlDocument yaml, List<ConfigurationProblem> problems) {
@@ -727,11 +947,14 @@ public final class BoostedYamlConfigurationLoader implements ConfigurationLoader
 
     private void validateMessageRoutes(String fileName, YamlDocument yaml, List<ConfigurationProblem> problems) {
         for (String route : yaml.getRoutesAsStrings(true)) {
-            if (route.equals("config-version") || route.equals("number-format") || route.equals("messages") || route.equals("feedback")) {
+            if (route.equals("config-version") || route.equals("number-format") || route.equals("currency") || route.equals("messages") || route.equals("feedback")) {
                 continue;
             }
             if (route.startsWith("number-format.")) {
                 validateNumberFormatRoute(fileName, route, problems);
+                continue;
+            }
+            if (Set.of("currency.display-name", "currency.symbol", "currency.format", "currency.price-format").contains(route)) {
                 continue;
             }
             if (route.startsWith("messages.")) {
@@ -787,9 +1010,11 @@ public final class BoostedYamlConfigurationLoader implements ConfigurationLoader
         }
         reader.requireSection("number-format");
         reader.requireSection("number-format.compact-suffixes");
+        reader.requireSection("currency");
         reader.requireSection("messages");
         reader.requireSection("feedback");
         NumberFormatSettings numberFormat = readNumberFormat(fileName, yaml, reader, problems);
+        CurrencySettings currency = readCurrency(fileName, reader, problems);
 
         Map<String, String> messages = new LinkedHashMap<>();
         for (String key : MESSAGE_KEYS) {
@@ -820,7 +1045,21 @@ public final class BoostedYamlConfigurationLoader implements ConfigurationLoader
                 feedback.put(key, actions);
             }
         }
-        return new MessageCatalog(language, numberFormat, messages, feedback);
+        return new MessageCatalog(language, numberFormat, currency, messages, feedback);
+    }
+
+    private CurrencySettings readCurrency(String fileName, Reader reader, List<ConfigurationProblem> problems) {
+        CurrencySettings defaults = CurrencySettings.defaults();
+        String displayName = reader.text("currency.display-name", defaults.displayName(), false, false);
+        String symbol = reader.text("currency.symbol", defaults.symbol(), true, false);
+        String format = reader.text("currency.format", defaults.format(), false, false);
+        String rawFormat = reader.text("currency.price-format", defaults.priceFormat().name(), false, false);
+        try {
+            return new CurrencySettings(displayName, symbol, format, PriceFormat.valueOf(rawFormat.toUpperCase(Locale.ROOT)));
+        } catch (IllegalArgumentException exception) {
+            problems.add(new ConfigurationProblem(fileName + ":currency", exception.getMessage()));
+            return defaults;
+        }
     }
 
     private NumberFormatSettings readNumberFormat(String fileName, YamlDocument yaml, Reader reader, List<ConfigurationProblem> problems) {
@@ -921,7 +1160,7 @@ public final class BoostedYamlConfigurationLoader implements ConfigurationLoader
         messages.putAll(catalog.messages());
         Map<String, List<FeedbackActionConfig>> feedback = new LinkedHashMap<>(fallback.feedback());
         feedback.putAll(catalog.feedback());
-        return new MessageCatalog(catalog.language(), catalog.numberFormat(), messages, feedback);
+        return new MessageCatalog(catalog.language(), catalog.numberFormat(), catalog.currency(), messages, feedback);
     }
 
     private void validateTemplate(String path, String template, Set<String> placeholders, List<ConfigurationProblem> problems) {
@@ -1034,6 +1273,9 @@ public final class BoostedYamlConfigurationLoader implements ConfigurationLoader
     }
 
     private record LoadedCommands(CommandSettings settings, String serialized) {
+    }
+
+    private record LoadedPayDialog(PayConfirmationDialogSettings settings, String serialized) {
     }
 
     private record LoadedCatalog(MessageCatalog catalog, String serialized) {

@@ -46,6 +46,7 @@ final class PlaceholderResolverTest {
         assertEquals("1234567", this.resolver.resolve(this.playerId, "points", true));
         assertEquals("1.234.567", this.resolver.resolve(this.playerId, "points_formatted", true));
         assertEquals("1,2M", this.resolver.resolve(this.playerId, "points_compact", true));
+        assertEquals("1,2M Points", this.resolver.resolve(this.playerId, "points_display", true));
         assertEquals("true", this.resolver.resolve(this.playerId, "ready", true));
     }
 
@@ -69,6 +70,7 @@ final class PlaceholderResolverTest {
         assertEquals("", this.resolver.resolve(this.playerId, "points", true));
         assertEquals("Cargando...", this.resolver.resolve(this.playerId, "points_formatted", true));
         assertEquals("Cargando...", this.resolver.resolve(this.playerId, "points_compact", true));
+        assertEquals("Cargando...", this.resolver.resolve(this.playerId, "points_display", true));
         assertEquals("false", this.resolver.resolve(this.playerId, "ready", true));
     }
 

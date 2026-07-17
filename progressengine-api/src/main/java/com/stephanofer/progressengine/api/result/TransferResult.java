@@ -9,7 +9,7 @@ import com.stephanofer.progressengine.api.transaction.OperationReceipt;
  * Typed result of a transfer request.
  */
 public sealed interface TransferResult permits TransferResult.Success, TransferResult.InsufficientFunds,
-    TransferResult.BalanceLimitExceeded, TransferResult.SelfTransferRejected, TransferResult.IdempotencyConflict {
+    TransferResult.BalanceLimitExceeded, TransferResult.StaleConfirmation, TransferResult.SelfTransferRejected, TransferResult.IdempotencyConflict {
     /** Returns the operation id. */
     OperationId operationId();
 
@@ -41,6 +41,14 @@ public sealed interface TransferResult permits TransferResult.Success, TransferR
     record BalanceLimitExceeded(OperationId operationId, ReplayStatus replayStatus) implements TransferResult {
         /** Creates a balance-limit result. */
         public BalanceLimitExceeded {
+            if (operationId == null) throw new NullPointerException("operationId cannot be null");
+            if (replayStatus == null) throw new NullPointerException("replayStatus cannot be null");
+        }
+    }
+
+    /** Transfer rejected because the sender revision changed after confirmation was created. */
+    record StaleConfirmation(OperationId operationId, ReplayStatus replayStatus) implements TransferResult {
+        public StaleConfirmation {
             if (operationId == null) throw new NullPointerException("operationId cannot be null");
             if (replayStatus == null) throw new NullPointerException("replayStatus cannot be null");
         }

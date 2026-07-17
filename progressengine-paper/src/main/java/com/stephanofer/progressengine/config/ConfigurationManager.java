@@ -84,7 +84,7 @@ public final class ConfigurationManager implements AutoCloseable {
         try {
             this.loader.persist(loaded);
         } catch (IOException exception) {
-            return failure(new ConfigurationProblem("config.yml", "could not persist validated configuration"));
+            return failure(new ConfigurationProblem("configuration", "could not persist validated configuration: " + exception.getMessage()));
         }
 
         if (this.closed.get()) {
@@ -150,6 +150,7 @@ public final class ConfigurationManager implements AutoCloseable {
                 previous.commands().registration(),
                 effectiveCommands.availability(),
                 effectiveCommands.permissions(),
+                effectiveCommands.amountInput(),
                 effectiveCommands.pay(),
                 effectiveCommands.history(),
                 effectiveCommands.suggestions(),
@@ -162,6 +163,7 @@ public final class ConfigurationManager implements AutoCloseable {
                 effectiveCommands.registration(),
                 effectiveCommands.availability(),
                 previous.commands().permissions(),
+                effectiveCommands.amountInput(),
                 effectiveCommands.pay(),
                 effectiveCommands.history(),
                 effectiveCommands.suggestions(),
@@ -169,6 +171,7 @@ public final class ConfigurationManager implements AutoCloseable {
             );
         }
         if (!candidate.commands().equals(previous.commands())) applied.add("commands");
+        if (!candidate.payDialog().equals(previous.payDialog())) applied.add("pay-dialog");
 
         ConfigurationSnapshot effective = new ConfigurationSnapshot(
             candidate.revision(),
@@ -177,7 +180,8 @@ public final class ConfigurationManager implements AutoCloseable {
             candidate.localization(),
             effectiveIdentity,
             candidate.messages(),
-            effectiveCommands
+            effectiveCommands,
+            candidate.payDialog()
         );
         if (applied.isEmpty()) applied.add("none");
         return new EffectiveReload(effective, new ConfigurationChangeSet(applied, restartRequired));

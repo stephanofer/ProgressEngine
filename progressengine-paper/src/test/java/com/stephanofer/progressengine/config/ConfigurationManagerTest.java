@@ -9,6 +9,7 @@ import java.io.IOException;
 import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
@@ -49,6 +50,41 @@ final class ConfigurationManagerTest {
         assertTrue(second.success());
         assertEquals("server-1", second.activeSnapshot().orElseThrow().config().serverId());
         assertTrue(second.changes().restartRequired().contains("server-id"));
+    }
+
+    @Test
+    void persistFailureReportsCauseAndDoesNotPublishSnapshot() {
+        QueueLoader loader = new QueueLoader();
+        loader.success(snapshot(1L));
+        loader.failPersist(new IOException("could not persist messages/es.yml"));
+        ConfigurationManager manager = new ConfigurationManager(loader, Runnable::run);
+
+        ConfigurationReloadResult result = manager.reloadAsync().join();
+
+        assertFalse(result.success());
+        assertTrue(manager.activeSnapshot().isEmpty());
+        assertTrue(result.problems().stream().anyMatch(problem -> problem.message().contains("messages/es.yml")));
+    }
+
+    @Test
+    void reloadAppliesPayDialogWithoutRestart() {
+        PayConfirmationDialogSettings changed = new PayConfirmationDialogSettings(false, true, 512, 160, 140, Map.of(
+            "en", new PayConfirmationDialogSettings.Locale("Confirm", "Confirm Points", List.of("<receiver>", "<amount>", "Exact: <amount_exact>"), "Send", "Send <amount_exact>", "Cancel", "No transfer"),
+            "es", new PayConfirmationDialogSettings.Locale("Confirmar", "Confirmar Points", List.of("<receiver>", "<amount>", "Exacto: <amount_exact>"), "Enviar", "Enviar <amount_exact>", "Cancelar", "Sin transferencia")
+        ));
+        QueueLoader loader = new QueueLoader();
+        loader.success(snapshot(1L));
+        loader.success(snapshot(2L, changed));
+        ConfigurationManager manager = new ConfigurationManager(loader, Runnable::run);
+
+        ConfigurationReloadResult first = manager.reloadAsync().join();
+        ConfigurationReloadResult second = manager.reloadAsync().join();
+
+        assertTrue(first.success());
+        assertTrue(second.success());
+        assertEquals(changed, second.activeSnapshot().orElseThrow().payDialog());
+        assertTrue(second.changes().applied().contains("pay-dialog"));
+        assertFalse(second.changes().restartRequired().contains("pay-dialog"));
     }
 
     @Test
@@ -130,8 +166,23 @@ final class ConfigurationManagerTest {
         return new ConfigurationSnapshot(revision, Instant.EPOCH, config);
     }
 
+    private static ConfigurationSnapshot snapshot(long revision, PayConfirmationDialogSettings payDialog) {
+        ConfigurationSnapshot base = snapshot(revision);
+        return new ConfigurationSnapshot(
+            base.revision(),
+            base.loadedAt(),
+            base.config(),
+            base.localization(),
+            base.identity(),
+            base.messages(),
+            base.commands(),
+            payDialog
+        );
+    }
+
     private static final class QueueLoader implements ConfigurationLoader {
         private final Queue<Object> outcomes = new ArrayDeque<>();
+        private IOException persistFailure;
 
         void success(ConfigurationSnapshot snapshot) {
             this.outcomes.add(new LoadedConfiguration(snapshot, "config-version: 1"));
@@ -139,6 +190,10 @@ final class ConfigurationManagerTest {
 
         void failure(ConfigurationProblem problem) {
             this.outcomes.add(new ConfigurationLoadException(List.of(problem)));
+        }
+
+        void failPersist(IOException exception) {
+            this.persistFailure = exception;
         }
 
         @Override
@@ -151,7 +206,10 @@ final class ConfigurationManagerTest {
         }
 
         @Override
-        public void persist(LoadedConfiguration configuration) {
+        public void persist(LoadedConfiguration configuration) throws IOException {
+            if (this.persistFailure != null) {
+                throw this.persistFailure;
+            }
         }
     }
 

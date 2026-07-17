@@ -17,6 +17,7 @@ public final class PlaceholderResolver {
     static final String POINTS = "points";
     static final String POINTS_FORMATTED = "points_formatted";
     static final String POINTS_COMPACT = "points_compact";
+    static final String POINTS_DISPLAY = "points_display";
     static final String READY = "ready";
 
     private final Predicate<UUID> readyLookup;
@@ -56,6 +57,7 @@ public final class PlaceholderResolver {
             case POINTS -> PointsNumberFormatter.raw(balance);
             case POINTS_FORMATTED -> PointsNumberFormatter.formatted(balance, catalog.numberFormat());
             case POINTS_COMPACT -> PointsNumberFormatter.compact(balance, catalog.numberFormat());
+            case POINTS_DISPLAY -> com.stephanofer.progressengine.localization.PointsDisplay.display(balance, catalog);
             default -> null;
         };
     }
@@ -101,6 +103,7 @@ public final class PlaceholderResolver {
     }
 
     private static boolean isKnown(String params) {
-        return POINTS.equals(params) || POINTS_FORMATTED.equals(params) || POINTS_COMPACT.equals(params) || READY.equals(params);
+        return POINTS.equals(params) || POINTS_FORMATTED.equals(params) || POINTS_COMPACT.equals(params)
+            || POINTS_DISPLAY.equals(params) || READY.equals(params);
     }
 }

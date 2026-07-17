@@ -150,10 +150,10 @@ public final class FeedbackService implements Listener, AutoCloseable {
 
     private MessageArguments awardArguments(long amount, long balance, String language) {
         return MessageArguments.builder()
-            .unparsed("amount", this.messages.formatted(amount, language))
+            .component("amount", this.messages.styled(amount, language))
             .unparsed("amount_raw", this.messages.raw(amount))
             .unparsed("amount_compact", this.messages.compact(amount, language))
-            .unparsed("balance", this.messages.formatted(balance, language))
+            .component("balance", this.messages.styled(balance, language))
             .unparsed("balance_raw", this.messages.raw(balance))
             .unparsed("balance_compact", this.messages.compact(balance, language))
             .build();
@@ -162,10 +162,10 @@ public final class FeedbackService implements Listener, AutoCloseable {
     private MessageArguments transferArguments(Component sender, long amount, long balance, String language) {
         return MessageArguments.builder()
             .component("sender", sender)
-            .unparsed("amount", this.messages.formatted(amount, language))
+            .component("amount", this.messages.styled(amount, language))
             .unparsed("amount_raw", this.messages.raw(amount))
             .unparsed("amount_compact", this.messages.compact(amount, language))
-            .unparsed("balance", this.messages.formatted(balance, language))
+            .component("balance", this.messages.styled(balance, language))
             .unparsed("balance_raw", this.messages.raw(balance))
             .unparsed("balance_compact", this.messages.compact(balance, language))
             .build();

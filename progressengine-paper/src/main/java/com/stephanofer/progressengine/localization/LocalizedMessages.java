@@ -55,6 +55,15 @@ public final class LocalizedMessages {
         return PointsNumberFormatter.compact(value, numberFormat(language));
     }
 
+    public String display(long value, String language) {
+        return PointsDisplay.display(value, catalog(language));
+    }
+
+    public Component styled(long value, String language) {
+        ConfigurationSnapshot snapshot = this.snapshotSupplier.get();
+        return PointsDisplay.styled(value, catalog(language), snapshot.config().economy().amountColors());
+    }
+
     public Component render(String template, MessageArguments arguments) {
         Objects.requireNonNull(template, "template");
         Objects.requireNonNull(arguments, "arguments");
